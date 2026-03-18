@@ -1,0 +1,26 @@
+[project]
+name = "unity-agent"
+version = "0.1.0"
+description = "Autoformalization pipeline for Lean theorem proving"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncclick>=8.3.0.7",
+    "claude-agent-sdk>=0.1.48",
+    "click>=8.3.1",
+    "lean-lsp-mcp>=0.1.0",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+unity = "unity_agent.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["unity_agent"]
+
+[tool.hatch.build.targets.sdist]
+include = ["unity_agent"]
