@@ -72,6 +72,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         exploration = parse_bool(os.getenv("EXPLORATION"))
         recurse = parse_bool(os.getenv("RECURSE"))
         
+        
         # Check for conflicts
         if not autofix and context:
             logging.critical("CRITICAL: cannot have context without autofix enabled")
@@ -133,13 +134,6 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         with open(_get_subagents_dir() / "GENERATION/GENERATOR.md", "r") as f:
             GENERATOR_SUBAGENT = f.read()
         
-        # Debug: log key values
-        logging.debug(f"project_path: {project_path}")
-        logging.debug(f"LEAN_MCP_SERVER: {LEAN_MCP_SERVER}")
-        logging.debug(f"PERMISSIONS: {PERMISSIONS}")
-        logging.debug(f"generation_budget: {generation_budget}")
-        logging.debug(f"ANTHROPIC_BASE_URL: {os.getenv('ANTHROPIC_BASE_URL')}")
-        
         async for message in query(
             prompt=f"Generate the specification language for {source}.",
             options=ClaudeAgentOptions(
@@ -151,7 +145,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         prompt=GENERATOR_SUBAGENT,
                         tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                     )
-                }.items() if v is not None},
+                },
                 system_prompt=GENERATION_PROMPT,
                 mcp_servers=LEAN_MCP_SERVER,
                 permission_mode=PERMISSIONS,
@@ -161,7 +155,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 enable_file_checkpointing=True,
                 model="opus",
                 fallback_model="sonnet",
-                env={k: v for k, v in {
+                env={
                     "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                     "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                     "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -169,8 +163,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                }.items() if v is not None},
-                extra_args={}.items() if v is not None},
+                },
+                extra_args={},
             ),
         ):
             if isinstance(message, AssistantMessage):
@@ -183,6 +177,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 print(f"Done: {message.subtype}")
                 
         logging.info("Generation phase completed successfully!")
+
+        exit(0)
     except Exception as e:
         logging.critical(f"CRITICAL (generation phase): {e}")
         exit(1)
@@ -209,7 +205,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=SEMIFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=SEMIFORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -219,7 +215,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -227,8 +223,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -263,7 +259,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=SEMIFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=SEMIFORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -273,7 +269,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -281,8 +277,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -317,7 +313,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=SEMIFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=SEMIFORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -327,7 +323,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -335,8 +331,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -393,7 +389,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                             )
-                        }.items() if v is not None},
+                        },
                         system_prompt=EXPLORATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
                         permission_mode=PERMISSIONS,
@@ -403,7 +399,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         enable_file_checkpointing=True,
                         model="opus",
                         fallback_model="sonnet",
-                        env={k: v for k, v in {
+                        env={
                             "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                             "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                             "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -411,8 +407,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                             "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                        }.items() if v is not None},
-                        extra_args={}.items() if v is not None},
+                        },
+                        extra_args={},
                     ),
                 ):
                     if isinstance(message, AssistantMessage):
@@ -461,7 +457,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                             )
-                        }.items() if v is not None},
+                        },
                         system_prompt=EXPLORATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
                         permission_mode=PERMISSIONS,
@@ -471,7 +467,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         enable_file_checkpointing=True,
                         model="opus",
                         fallback_model="sonnet",
-                        env={k: v for k, v in {
+                        env={
                             "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                             "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                             "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -479,8 +475,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                             "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                        }.items() if v is not None},
-                        extra_args={}.items() if v is not None},
+                        },
+                        extra_args={},
                     ),
                 ):
                     if isinstance(message, AssistantMessage):
@@ -529,7 +525,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                             )
-                        }.items() if v is not None},
+                        },
                         system_prompt=EXPLORATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
                         permission_mode=PERMISSIONS,
@@ -539,7 +535,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         enable_file_checkpointing=True,
                         model="opus",
                         fallback_model="sonnet",
-                        env={k: v for k, v in {
+                        env={
                             "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                             "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                             "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -547,8 +543,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                             "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                        }.items() if v is not None},
-                        extra_args={}.items() if v is not None},
+                        },
+                        extra_args={},
                     ),
                 ):
                     if isinstance(message, AssistantMessage):
@@ -597,7 +593,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                             )
-                        }.items() if v is not None},
+                        },
                         system_prompt=EXPLORATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
                         permission_mode=PERMISSIONS,
@@ -607,7 +603,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         enable_file_checkpointing=True,
                         model="opus",
                         fallback_model="sonnet",
-                        env={k: v for k, v in {
+                        env={
                             "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                             "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                             "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -615,8 +611,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                             "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                        }.items() if v is not None},
-                        extra_args={}.items() if v is not None},
+                        },
+                        extra_args={},
                     ),
                 ):
                     if isinstance(message, AssistantMessage):
@@ -653,7 +649,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 options=ClaudeAgentOptions(
                     tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
                     allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
-                    agents={}.items() if v is not None},
+                    agents={},
                     system_prompt=PREPARATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -663,7 +659,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -671,8 +667,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -699,7 +695,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 options=ClaudeAgentOptions(
                     tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
                     allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
-                    agents={}.items() if v is not None},
+                    agents={},
                     system_prompt=PREPARATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -709,7 +705,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -717,8 +713,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -768,7 +764,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=PROOFFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=FORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -778,7 +774,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -786,8 +782,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -829,7 +825,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=PROOFFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=FORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -839,7 +835,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -847,8 +843,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -898,7 +894,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=PROOFFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=CRITIC_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -908,7 +904,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -916,8 +912,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
@@ -959,7 +955,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             prompt=PROOFFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
                         )
-                    }.items() if v is not None},
+                    },
                     system_prompt=CRITIC_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
                     permission_mode=PERMISSIONS,
@@ -969,7 +965,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                     enable_file_checkpointing=True,
                     model="opus",
                     fallback_model="sonnet",
-                    env={k: v for k, v in {
+                    env={
                         "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
                         "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
                         "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
@@ -977,8 +973,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
                         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
-                    }.items() if v is not None},
-                    extra_args={}.items() if v is not None},
+                    },
+                    extra_args={},
                 ),
             ):
                 if isinstance(message, AssistantMessage):
