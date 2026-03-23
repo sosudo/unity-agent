@@ -65,6 +65,91 @@ def _get_subagents_dir() -> Path:
     return Path(__file__).parent / "SUBAGENTS"
 
 
+def _get_default_prompts_dir() -> Path:
+    return Path(__file__).parent / "DEFAULT_PROMPTS"
+
+
+def _get_default_subagents_dir() -> Path:
+    return Path(__file__).parent / "DEFAULT_SUBAGENTS"
+
+
+def _get_default_teams_dir() -> Path:
+    return Path(__file__).parent / "DEFAULT_TEAMS"
+
+
+def _get_library_dir() -> Path:
+    return Path.home() / ".unity" / "library"
+
+
+def _get_project_notes_dir() -> Path:
+    return Path.cwd() / ".unity"
+
+
+def _init_library() -> None:
+    """Create global library and project notes directories if they don't exist."""
+    lib = _get_library_dir()
+    for subdir in ("tactics", "lemmas", "ir-patterns", "subagents"):
+        (lib / subdir).mkdir(parents=True, exist_ok=True)
+    _get_project_notes_dir().mkdir(exist_ok=True)
+
+
+def _load_library_context() -> str:
+    """Read all library files and project notes into an injectable string.
+
+    Returns an empty string if the library and project notes are all empty.
+    """
+    sections: list[str] = []
+
+    lib = _get_library_dir()
+    for subdir in ("tactics", "lemmas", "ir-patterns"):
+        subdir_path = lib / subdir
+        for md_file in sorted(subdir_path.glob("*.md")):
+            text = md_file.read_text().strip()
+            if text:
+                label = f"*{subdir.capitalize()} — {md_file.stem}*"
+                sections.append(f"{label}\n\n{text}")
+
+    notes_dir = _get_project_notes_dir()
+    for note_file in sorted(notes_dir.glob("*.md")):
+        text = note_file.read_text().strip()
+        if text:
+            label = f"*Project notes — {note_file.stem}*"
+            sections.append(f"{label}\n\n{text}")
+
+    if not sections:
+        return ""
+    return "**Library Context**\n\n" + "\n\n---\n\n".join(sections)
+
+
+# Populated at run_pipeline startup; available to all query() agents= dicts.
+LIBRARY_SUBAGENTS: dict = {}
+
+
+def _load_library_subagents() -> dict:
+    """Parse ~/.unity/library/subagents/*.md into AgentDefinition objects."""
+    import re
+    result = {}
+    subagents_dir = _get_library_dir() / "subagents"
+    for md_file in sorted(subagents_dir.glob("*.md")):
+        raw = md_file.read_text()
+        # Parse YAML-lite frontmatter between --- delimiters
+        fm_match = re.match(r"^---\n(.*?)\n---\n(.*)", raw, re.DOTALL)
+        if not fm_match:
+            continue
+        fm_text, body = fm_match.group(1), fm_match.group(2).strip()
+        meta: dict = {}
+        for line in fm_text.splitlines():
+            if ":" in line:
+                k, _, v = line.partition(":")
+                meta[k.strip()] = v.strip()
+        name = meta.get("name", md_file.stem)
+        description = meta.get("description", "")
+        tools_raw = meta.get("tools", "Read,Write,Edit,Bash,Glob,Grep,WebSearch,WebFetch,Agent,Skill")
+        tools = [t.strip() for t in tools_raw.split(",")]
+        result[name] = AgentDefinition(description=description, prompt=body, tools=tools)
+    return result
+
+
 async def run_pipeline(source: str, project_dir: str, context: bool):
     """Run the full autoformalization pipeline."""
     global _console
@@ -232,13 +317,29 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         }
     }
 
+    # Library initialization and context loading
+    _init_library()
+    library_context = _load_library_context()
+    global LIBRARY_SUBAGENTS
+    LIBRARY_SUBAGENTS = _load_library_subagents()
+    if library_context:
+        logging.info("Library context loaded.")
+    if LIBRARY_SUBAGENTS:
+        logging.info(f"Loaded {len(LIBRARY_SUBAGENTS)} library subagent(s): {', '.join(LIBRARY_SUBAGENTS)}")
+
+    def with_library(prompt: str) -> str:
+        """Append library context to a prompt if any exists."""
+        if not library_context:
+            return prompt
+        return prompt + "\n\n---\n\n" + library_context
+
     # Generation phase
     
     _console.rule("[bold blue]Generation Phase[/bold blue]")
     try:
         # Load generation phase system prompt and generator subagent prompt
         with open(PROMPTS_DIR / "GENERATION.md", "r") as f:
-            GENERATION_PROMPT = f.read()
+            GENERATION_PROMPT = with_library(f.read())
         with open(_get_subagents_dir() / "GENERATION/GENERATOR.md", "r") as f:
             GENERATOR_SUBAGENT = f.read()
         
@@ -252,7 +353,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                         description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
                         prompt=GENERATOR_SUBAGENT,
                         tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                    )
+                    ),
+                    **LIBRARY_SUBAGENTS
                 },
                 system_prompt=GENERATION_PROMPT,
                 mcp_servers=LEAN_MCP_SERVER,
@@ -290,7 +392,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         try:
             # Load semiformalization phase system prompt and semiformalizer subagent prompt
             with open(PROMPTS_DIR / "SEMIFORMALIZATION/FF.md", "r") as f:
-                SEMIFORMALIZATION_PROMPT = f.read()
+                SEMIFORMALIZATION_PROMPT = with_library(f.read())
             with open(_get_subagents_dir() / "SEMIFORMALIZATION/FF.md", "r") as f:
                 SEMIFORMALIZER_SUBAGENT = f.read()
             
@@ -304,7 +406,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             description="Semiformalizer subagent. Capable of producing faithful semiformal translations of a source into the IR specification language located in `language/`.",
                             prompt=SEMIFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                        )
+                        ),
+                        **LIBRARY_SUBAGENTS
                     },
                     system_prompt=SEMIFORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
@@ -337,7 +440,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         try:
             # Load semiformalization phase system prompt and semiformalizer subagent prompt
             with open(PROMPTS_DIR / "SEMIFORMALIZATION/TF.md", "r") as f:
-                SEMIFORMALIZATION_PROMPT = f.read()
+                SEMIFORMALIZATION_PROMPT = with_library(f.read())
             with open(_get_subagents_dir() / "SEMIFORMALIZATION/TF.md", "r") as f:
                 SEMIFORMALIZER_SUBAGENT = f.read()
             
@@ -351,7 +454,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             description="Semiformalizer subagent. Capable of producing faithful semiformal translations of a source into the IR specification language located in `language/`.",
                             prompt=SEMIFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                        )
+                        ),
+                        **LIBRARY_SUBAGENTS
                     },
                     system_prompt=SEMIFORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
@@ -384,7 +488,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         try:
             # Load semiformalization phase system prompt and semiformalizer subagent prompt
             with open(PROMPTS_DIR / "SEMIFORMALIZATION/TT.md", "r") as f:
-                SEMIFORMALIZATION_PROMPT = f.read()
+                SEMIFORMALIZATION_PROMPT = with_library(f.read())
             with open(_get_subagents_dir() / "SEMIFORMALIZATION/TT.md", "r") as f:
                 SEMIFORMALIZER_SUBAGENT = f.read()
             
@@ -398,7 +502,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                             description="Semiformalizer subagent. Capable of producing faithful semiformal translations of a source into the IR specification language located in `language/`.",
                             prompt=SEMIFORMALIZER_SUBAGENT,
                             tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                        )
+                        ),
+                        **LIBRARY_SUBAGENTS
                     },
                     system_prompt=SEMIFORMALIZATION_PROMPT,
                     mcp_servers=LEAN_MCP_SERVER,
@@ -442,7 +547,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
                     with open(PROMPTS_DIR / "EXPLORATION/FF.md", "r") as f:
-                        EXPLORATION_PROMPT = f.read()
+                        EXPLORATION_PROMPT = with_library(f.read())
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/F.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/SEMIFORMALIZER/F.md", "r") as f:
@@ -470,7 +575,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                     description="ExplorationGenerator subagent. Capable of extending the IR specification language to accomodate new sources gathered during exploration.",
                                     prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                     tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                                )
+                                ),
+                                **LIBRARY_SUBAGENTS
                             },
                             system_prompt=EXPLORATION_PROMPT,
                             mcp_servers=LEAN_MCP_SERVER,
@@ -503,7 +609,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
                     with open(PROMPTS_DIR / "EXPLORATION/FT.md", "r") as f:
-                        EXPLORATION_PROMPT = f.read()
+                        EXPLORATION_PROMPT = with_library(f.read())
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/T.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/SEMIFORMALIZER/T.md", "r") as f:
@@ -531,7 +637,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                     description="ExplorationGenerator subagent. Capable of extending the IR specification language to accomodate new sources gathered during exploration.",
                                     prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                     tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                                )
+                                ),
+                                **LIBRARY_SUBAGENTS
                             },
                             system_prompt=EXPLORATION_PROMPT,
                             mcp_servers=LEAN_MCP_SERVER,
@@ -564,7 +671,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
                     with open(PROMPTS_DIR / "EXPLORATION/TF.md", "r") as f:
-                        EXPLORATION_PROMPT = f.read()
+                        EXPLORATION_PROMPT = with_library(f.read())
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/F.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/SEMIFORMALIZER/F.md", "r") as f:
@@ -592,7 +699,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                     description="ExplorationGenerator subagent. Capable of extending the IR specification language to accomodate new sources gathered during exploration.",
                                     prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                     tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                                )
+                                ),
+                                **LIBRARY_SUBAGENTS
                             },
                             system_prompt=EXPLORATION_PROMPT,
                             mcp_servers=LEAN_MCP_SERVER,
@@ -625,7 +733,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
                     with open(PROMPTS_DIR / "EXPLORATION/TT.md", "r") as f:
-                        EXPLORATION_PROMPT = f.read()
+                        EXPLORATION_PROMPT = with_library(f.read())
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/T.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/SEMIFORMALIZER/T.md", "r") as f:
@@ -653,7 +761,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                     description="ExplorationGenerator subagent. Capable of extending the IR specification language to accomodate new sources gathered during exploration.",
                                     prompt=EXPLORATIONGENERATOR_SUBAGENT,
                                     tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                                )
+                                ),
+                                **LIBRARY_SUBAGENTS
                             },
                             system_prompt=EXPLORATION_PROMPT,
                             mcp_servers=LEAN_MCP_SERVER,
@@ -696,14 +805,14 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             try:
                 # Load preparation phase system prompt
                 with open(PROMPTS_DIR / "PREPARATION/F.md", "r") as f:
-                    PREPARATION_PROMPT = f.read()
+                    PREPARATION_PROMPT = with_library(f.read())
             
                 async for message in query(
                     prompt=f"Prepare to formalize {source}.",
                     options=ClaudeAgentOptions(
                         tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
                         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
-                        agents={},
+                        agents={**LIBRARY_SUBAGENTS},
                         system_prompt=PREPARATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
                         permission_mode=PERMISSIONS,
@@ -735,14 +844,14 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             try:
                 # Load preparation phase system prompt
                 with open(PROMPTS_DIR / "PREPARATION/T.md", "r") as f:
-                    PREPARATION_PROMPT = f.read()
+                    PREPARATION_PROMPT = with_library(f.read())
             
                 async for message in query(
                     prompt=f"Prepare to formalize {source}. The Lean project is {project_path}.",
                     options=ClaudeAgentOptions(
                         tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
                         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
-                        agents={},
+                        agents={**LIBRARY_SUBAGENTS},
                         system_prompt=PREPARATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
                         permission_mode=PERMISSIONS,
@@ -782,7 +891,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             try:
                 # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                 with open(PROMPTS_DIR / "FORMALIZATION/F.md", "r") as f:
-                    FORMALIZATION_PROMPT = f.read()
+                    FORMALIZATION_PROMPT = with_library(f.read())
                 with open(_get_subagents_dir() / "FORMALIZATION/DECLARATIONFORMALIZER/F.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
                 with open(_get_subagents_dir() / "FORMALIZATION/PROOFFORMALIZER/F.md", "r") as f:
@@ -803,7 +912,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
                                 prompt=PROOFFORMALIZER_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                            )
+                            ),
+                            **LIBRARY_SUBAGENTS
                         },
                         system_prompt=FORMALIZATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
@@ -836,7 +946,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             try:
                 # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                 with open(PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
-                    FORMALIZATION_PROMPT = f.read()
+                    FORMALIZATION_PROMPT = with_library(f.read())
                 with open(_get_subagents_dir() / "FORMALIZATION/DECLARATIONFORMALIZER/T.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
                 with open(_get_subagents_dir() / "FORMALIZATION/PROOFFORMALIZER/T.md", "r") as f:
@@ -857,7 +967,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
                                 prompt=PROOFFORMALIZER_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                            )
+                            ),
+                            **LIBRARY_SUBAGENTS
                         },
                         system_prompt=FORMALIZATION_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
@@ -898,7 +1009,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             try:
                 # Load critic phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                 with open(PROMPTS_DIR / "CRITIC.md", "r") as f:
-                    CRITIC_PROMPT = f.read()
+                    CRITIC_PROMPT = with_library(f.read())
                 with open(_get_subagents_dir() / "CRITIC/DECLARATIONFORMALIZER/F.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
                 with open(_get_subagents_dir() / "CRITIC/PROOFFORMALIZER/F.md", "r") as f:
@@ -919,7 +1030,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
                                 prompt=PROOFFORMALIZER_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                            )
+                            ),
+                            **LIBRARY_SUBAGENTS
                         },
                         system_prompt=CRITIC_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
@@ -952,7 +1064,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             try:
                 # Load critic phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                 with open(PROMPTS_DIR / "CRITIC.md", "r") as f:
-                    CRITIC_PROMPT = f.read()
+                    CRITIC_PROMPT = with_library(f.read())
                 with open(_get_subagents_dir() / "CRITIC/DECLARATIONFORMALIZER/T.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
                 with open(_get_subagents_dir() / "CRITIC/PROOFFORMALIZER/T.md", "r") as f:
@@ -973,7 +1085,8 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
                                 description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
                                 prompt=PROOFFORMALIZER_SUBAGENT,
                                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"]
-                            )
+                            ),
+                            **LIBRARY_SUBAGENTS
                         },
                         system_prompt=CRITIC_PROMPT,
                         mcp_servers=LEAN_MCP_SERVER,
@@ -1006,6 +1119,53 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             logging.critical("CRITICAL (critic phase): reached unreachable code")
             exit(1)
         
+        # Retrospective phase (inside loop — updates .unity/ before next iteration)
+
+        _console.rule("[bold blue]Retrospective Phase[/bold blue]")
+        try:
+            with open(PROMPTS_DIR / "RETROSPECTIVE.md", "r") as f:
+                RETROSPECTIVE_PROMPT = f.read().format(
+                    SOURCE_PATH=source,
+                    LIBRARY_DIR=str(_get_library_dir()),
+                    PROJECT_NOTES_DIR=str(_get_project_notes_dir()),
+                    SUBAGENTS_DIR=str(_get_subagents_dir()),
+                    DEFAULT_SUBAGENTS_DIR=str(_get_default_subagents_dir()),
+                )
+
+            async for message in query(
+                prompt=f"Run the retrospective for the unity formalization of {source}.",
+                options=ClaudeAgentOptions(
+                    tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
+                    allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "Skill"],
+                    agents={**LIBRARY_SUBAGENTS},
+                    system_prompt=RETROSPECTIVE_PROMPT,
+                    permission_mode=PERMISSIONS,
+                    continue_conversation=False,
+                    disallowed_tools=[],
+                    enable_file_checkpointing=True,
+                    model="opus",
+                    fallback_model="sonnet",
+                    env={
+                        "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
+                        "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
+                        "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
+                        "ANTHROPIC_DEFAULT_OPUS_MODEL":os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+                        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+                    },
+                    extra_args={},
+                ),
+            ):
+                _log_agent_message(message)
+
+            logging.info("Retrospective phase completed successfully!")
+        except Exception as e:
+            logging.error(f"ERROR (retrospective phase): {e}")
+
+        # Reload library context so next iteration picks up .unity/ additions
+        library_context = _load_library_context()
+
         # Critic loop status check
         try:
             report_text = Path("REPORT.md").read_text()
@@ -1023,7 +1183,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             break
 
     # Cleanup
-    
+
     logging.info("Cleaning up...")
     
     try:    
