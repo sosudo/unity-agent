@@ -10,6 +10,7 @@ For each assumption type recorded in `semiformal/`, work through the following p
 2. **If not found and simple enough to formalize**, formalize it yourself. You may spawn Explorer subagents, ExplorationGenerator subagents, and Semiformalizer subagents as you deem necessary, and may parallelize across assumptions. If formalized, update `semiformal/` accordingly and mark the assumption as resolved.
 3. **If too complex to formalize**, proceed as follows:
 	- Spawn Explorer subagents to search the web and gather sources for the assumption. Sources may be saved as files or directories as the agent deems appropriate.
+	- For formally published mathematics, arXiv (`https://export.arxiv.org/api/query?search_query=...`) and Semantic Scholar (`https://api.semanticscholar.org/graph/v1/paper/search?query=...`) are useful sources — both free, no API key required.
 	- Extend `language/` as needed to accommodate the new sources. If comment syntax is not yet defined in the IR spec, add it now. Commit all `language/` changes before proceeding.
 	- Spawn Semiformalizer subagents to semiformalize the new sources, integrating them into `semiformal/` such that dependencies are tracked correctly and the new chunks are coherent with the existing translation. Cross-reference new chunks against the existing Lean project — if any definitions or results already exist there, record them as such rather than re-formalizing.
 	- If you deem it appropriate, add a brief comment to the original assumption in `semiformal/` explaining the resolution approach, using the IR spec's comment syntax.
@@ -64,11 +65,7 @@ Before using any lemma name returned by these tools, verify it exists using `lea
 
 **Library**
 
-Unity maintains a global library at `~/.unity/library/` built up across formalization runs. It contains:
-- `lemmas/{domain}.md` — Mathlib lemmas that proved non-obvious but useful, indexed by mathematical domain
-- `tactics/{domain}.md` — tactic patterns that closed specific goal shapes, indexed by domain
-
-If relevant library content exists, it will be appended to this prompt as **Library Context**. Consult lemma entries when searching for Mathlib lemmas for assumption types — they record known-good names and import paths for specific goal shapes.
+Unity maintains a global library at `~/.unity/library/`. If library files are present, a manifest will be appended below — use the `Read` tool to access any that seem relevant.
 
 **Commits**
 

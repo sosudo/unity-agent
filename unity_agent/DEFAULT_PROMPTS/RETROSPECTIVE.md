@@ -11,6 +11,7 @@ Read the following in full before proceeding:
 - `REPORT.md`
 - The git log (all commits, especially those prefixed `UNITY:`, `FORMALIZATION:`, `EXPLORATION:`, `CRITIC:`)
 - Existing library content in `{LIBRARY_DIR}` — read before writing to avoid duplicating existing entries
+- Helper scripts at `~/.unity/scripts/` — available for analyzing sorry patterns, axiom usage, and import minimization
 - Existing project notes in `{PROJECT_NOTES_DIR}` — update rather than replace
 
 ---

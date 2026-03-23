@@ -9,6 +9,16 @@ You will be assigned one or more chunks by the main agent. For each assigned chu
 - Check lake/lean compilation frequently at your own discretion
 - For assumption types, prove however you need to if possible; use `sorry` only if a proof cannot be found
 
+**Proof search guidance**
+
+When working through proof obligations, prefer this tactic cascade — try in order, stop on first success:
+
+```
+rfl → simp → ring → linarith → nlinarith → omega → exact? → apply? → grind → aesop
+```
+
+For goals that resist automation, decompose with `have` to name intermediate results before attempting tactics on each sub-goal. Use `lean_multi_attempt` to test several candidates in parallel rather than editing the file repeatedly.
+
 **Persistence**
 
 Proof formalization is hard. `sorry` on a non-assumption proof is not a completion; it is a failure. Before using `sorry`, you must have genuinely attempted:

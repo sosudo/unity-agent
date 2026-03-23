@@ -15,7 +15,7 @@ Read every `.lean` file in the project. For each declaration that contains a `so
 For each identified declaration, search for existing mathematical content that could inform its proof or implementation:
 
 1. **Search Mathlib** — check whether the statement (or a close equivalent) already exists in Mathlib. If found, record the Mathlib name, import path, and any signature differences relative to the project's declaration.
-2. **Search the web** — search for papers, textbooks, Lean/Mathlib/Coq/Agda/Isabelle developments, or any formal or informal sources containing a proof or construction of the statement.
+2. **Search the web** — search for papers, textbooks, Lean/Mathlib/Coq/Agda/Isabelle developments, or any formal or informal sources containing a proof or construction of the statement. For formally published mathematics, arXiv (`https://export.arxiv.org/api/query?search_query=...`) and Semantic Scholar (`https://api.semanticscholar.org/graph/v1/paper/search?query=...`) are useful sources — both free, no API key required.
 3. **Assess novelty** — if no relevant content is found after a genuine search, mark the declaration as novel. Novel declarations still proceed through the pipeline; the formalization phase will construct proofs from first principles.
 
 Create a team of Explorer agents to parallelize the search across declarations. Each team agent should be assigned one or more declarations and report back with its findings. Team agents may themselves spawn subagents.
@@ -49,7 +49,7 @@ The following tools are available via the Lean LSP MCP server:
 
 **Library**
 
-Unity maintains a global library at `~/.unity/library/` built up across formalization runs. If relevant library content exists, it will be appended to this prompt as **Library Context**. Consult lemma entries when searching for Mathlib equivalents — they record known-good names and import paths for specific goal shapes.
+Unity maintains a global library at `~/.unity/library/`. If library files are present, a manifest will be appended below — use the `Read` tool to access any that seem relevant.
 
 **Commits**
 

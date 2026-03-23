@@ -65,7 +65,7 @@ The following are non-exhaustive design considerations you may find useful:
 
 **Library**
 
-Unity maintains a global library of IR designs from prior runs at `~/.unity/library/ir-patterns/`. Each entry records the source it was designed for, domain tags, key IR design decisions, and what worked or didn't. If any relevant prior IR designs exist, they will be appended to this prompt as **Library Context** at the end. Consult them for inspiration — you are not bound by them.
+Unity maintains a global library of IR designs from prior runs at `~/.unity/library/ir-patterns/`. If any are present, they will be listed in the manifest appended below — use the `Read` tool to access them. You are not bound by them.
 
 **Subagents**
 

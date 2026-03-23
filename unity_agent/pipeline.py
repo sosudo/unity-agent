@@ -90,37 +90,90 @@ def _get_project_notes_dir() -> Path:
 def _init_library() -> None:
     """Create global library and project notes directories if they don't exist."""
     lib = _get_library_dir()
-    for subdir in ("tactics", "lemmas", "ir-patterns", "subagents"):
+    for subdir in ("tactics", "lemmas", "ir-patterns", "subagents", "references"):
         (lib / subdir).mkdir(parents=True, exist_ok=True)
     _get_project_notes_dir().mkdir(exist_ok=True)
+    _seed_default_library()
+
+
+def _seed_default_library() -> None:
+    """Copy bundled DEFAULT_LIBRARY and scripts to ~/.unity/ if not already present."""
+    import shutil
+
+    package_root = Path(__file__).parent
+
+    # Seed reference docs and any other DEFAULT_LIBRARY content
+    default_lib = package_root / "DEFAULT_LIBRARY"
+    if default_lib.exists():
+        lib = _get_library_dir()
+        for src in sorted(default_lib.rglob("*.md")):
+            rel = src.relative_to(default_lib)
+            dst = lib / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not dst.exists():
+                shutil.copy2(src, dst)
+
+    # Seed helper scripts
+    scripts_src = package_root / "scripts"
+    if scripts_src.exists():
+        scripts_dst = Path.home() / ".unity" / "scripts"
+        scripts_dst.mkdir(parents=True, exist_ok=True)
+        for src in sorted(scripts_src.iterdir()):
+            dst = scripts_dst / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
+                # Make shell/python scripts executable
+                if src.suffix in (".sh", ".py"):
+                    dst.chmod(dst.stat().st_mode | 0o111)
 
 
 def _load_library_context() -> str:
-    """Read all library files and project notes into an injectable string.
+    """Build a compact manifest of available library files for injection into prompts.
 
-    Returns an empty string if the library and project notes are all empty.
+    Returns an empty string if no library or project note files exist.
+    Agents use the Read tool to access individual files on demand.
     """
-    sections: list[str] = []
+    import re
 
+    def first_heading(path: Path) -> str:
+        """Return the first markdown heading in a file as a one-line description."""
+        try:
+            for line in path.read_text(errors="replace").splitlines():
+                line = line.strip()
+                if line.startswith("#"):
+                    return re.sub(r"^#+\s*", "", line)
+        except OSError:
+            pass
+        return path.stem.replace("-", " ").replace("_", " ").title()
+
+    sections: list[str] = []
     lib = _get_library_dir()
-    for subdir in ("tactics", "lemmas", "ir-patterns"):
+
+    for subdir in ("tactics", "lemmas", "ir-patterns", "references"):
         subdir_path = lib / subdir
-        for md_file in sorted(subdir_path.glob("*.md")):
-            text = md_file.read_text().strip()
-            if text:
-                label = f"*{subdir.capitalize()} — {md_file.stem}*"
-                sections.append(f"{label}\n\n{text}")
+        if not subdir_path.exists():
+            continue
+        files = sorted(f for f in subdir_path.glob("*.md") if f.stat().st_size > 0)
+        if not files:
+            continue
+        lines = [f"*{subdir}/*"]
+        for f in files:
+            lines.append(f"- `{f}` — {first_heading(f)}")
+        sections.append("\n".join(lines))
 
     notes_dir = _get_project_notes_dir()
-    for note_file in sorted(notes_dir.glob("*.md")):
-        text = note_file.read_text().strip()
-        if text:
-            label = f"*Project notes — {note_file.stem}*"
-            sections.append(f"{label}\n\n{text}")
+    note_files = [f for f in sorted(notes_dir.glob("*.md")) if f.exists() and f.stat().st_size > 0]
+    if note_files:
+        lines = ["*project notes — `.unity/`*"]
+        for f in note_files:
+            lines.append(f"- `{f}` — {first_heading(f)}")
+        sections.append("\n".join(lines))
 
     if not sections:
         return ""
-    return "**Library Context**\n\n" + "\n\n---\n\n".join(sections)
+
+    header = "**Library** — `~/.unity/library/`\n\nUse `Read` to access any file listed below.\n\n"
+    return header + "\n\n".join(sections)
 
 
 # Populated at run_pipeline startup; available to all query() agents= dicts.

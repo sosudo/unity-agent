@@ -64,11 +64,7 @@ Before using any lemma name returned by these tools, verify it exists using `lea
 
 **Library**
 
-Unity maintains a global library at `~/.unity/library/` built up across formalization runs. It contains:
-- `lemmas/{domain}.md` — Mathlib lemmas that proved non-obvious but useful, indexed by mathematical domain
-- `tactics/{domain}.md` — tactic patterns that closed specific goal shapes, indexed by domain
-
-If relevant library content exists, it will be appended to this prompt as **Library Context**. Consult lemma entries when searching for Mathlib lemmas for assumption types — they record known-good names and import paths for specific goal shapes.
+Unity maintains a global library at `~/.unity/library/`. If library files are present, a manifest will be appended below — use the `Read` tool to access any that seem relevant.
 
 **Commits**
 

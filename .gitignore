@@ -12,3 +12,6 @@ wheels/
 
 # Shiv files
 TODO
+
+# Claude files
+.claude/

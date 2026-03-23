@@ -10,6 +10,7 @@ You will be assigned one or more assumption types by the main agent. For each as
 - Sources should be saved in a location the main agent can find and assign to Semiformalizer subagents; use your judgment on placement
 - Gather as many relevant sources as needed to fully cover the assumption
 - Prefer primary sources (original papers, official Mathlib/Lean files) over secondary sources
+- For formally published mathematics, arXiv (`https://export.arxiv.org/api/query?search_query=...`) and Semantic Scholar (`https://api.semanticscholar.org/graph/v1/paper/search?query=...`) are useful sources — both free, no API key required.
 - Cross-reference gathered sources against the existing Lean project — if a source is already fully or partially present in the project, note this in your report to avoid redundant work
 
 **Output**
