@@ -33,8 +33,10 @@ Your IR must have:
 - The IR should be **as close to bijective with Lean 4 as possible** for the given source. It need not generalize beyond the source.
 - The IR should be **minimizing linguistic entropy** where the source is natural language (e.g. LaTeX): implicit types should be made explicit, ambiguities resolved, and informal proof steps lifted into structured form. Linguistic framing that carries no mathematical content (e.g. "it is easy to see that") should be dropped or demoted to metadata.
 - The IR should be **accurate**: no loss of mathematical information (statement content, quantifier structure, binding scope, proof strategy, named intermediate claims, etc.).
+- The IR should be **proof-translation-aware**: beyond encoding statements and declarations, the IR must provide explicit structure for how proofs are to be translated — covering proof step decomposition, the correspondence between source proof reasoning and Lean 4 proof terms, and any intermediate claims or sub-goals named in the source. The aim is to preserve both *semantic equivalence* (the Lean proof proves the intended statement) and *structural equivalence* (the proof strategy mirrors the source's proof strategy, not just its conclusion).
 - The IR should be **machine-parseable and unambiguous** in its grammar, particularly for dependency structure and writeback annotations.
 - The IR should be **expressive enough** to capture source intent, **restrictive enough** for parsing, and **structured enough** to map into Lean 4.
+- The IR need not be textual or in English — it may use any modality the agent deems appropriate (visual, symbolic, diagrammatic, etc.) with a freely chosen tokenization scheme. Where useful, the IR may incorporate or generate supplementary artifacts such as diagrams, animations, images, or graphs alongside the language itself.
 
 ---
 
@@ -51,6 +53,8 @@ The following are non-exhaustive design considerations you may find useful:
 - Partiality and incompleteness markers
 - Provenance alignment and source indexing
 - Modularity and namespace structure
+- Formal grammar specification (e.g. BNF, EBNF, PEG, custom grammar, etc.)
+- Proof step decomposition and tactic correspondence
 - Metadata channels (for non-mathematical content, proof intent, authorial notes)
 - Ambiguity representation and resolution records
 - Intent annotation

@@ -37,3 +37,9 @@ Once all chunks have been checked and all spot fixes applied, produce `REPORT.md
 - For unresolved chunks: a description of the issue and why it could not be spot-fixed
 - Overall faithfulness assessment: a summary of how faithfully the formalization reflects the source, both semantically and structurally
 - Overall soundness assessment: a summary of any remaining soundness concerns
+
+**Status declaration**
+
+At the end of `REPORT.md`, include exactly one of the following status lines:
+- `**Status:** COMPLETE` — all chunks passed or were spot-fixed with no unresolved issues remaining (or only minor issues that do not affect correctness).
+- `**Status:** NEEDS_REVISION` — unresolved issues remain that require re-exploration and re-formalization.

@@ -64,9 +64,9 @@ The following are non-exhaustive design considerations you may find useful:
 
 ---
 
-**Subagents**
+**Team**
 
-You may spawn Generator subagents to assist with design decisions, deliberate on specific aspects of the source, propose alternative designs, or draft sub-languages which you aggregate. You may only output one final IR specification.
+You may create a team of Generator agents to assist with design decisions, deliberate on specific aspects of the source, propose alternative designs, or draft sub-languages which you aggregate. You may only output one final IR specification. Team agents may themselves spawn subagents.
 
 ---
 

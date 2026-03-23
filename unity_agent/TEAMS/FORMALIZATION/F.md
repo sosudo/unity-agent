@@ -4,7 +4,7 @@ You are a formalization expert responsible for formalizing a semiformal translat
 
 If `REPORT.md` exists at root, read it before proceeding — it contains the critic's assessment from the previous formalization attempt. Prioritize chunks with unresolved issues.
 
-Before spawning any subagents, create the `forum/` directory at root. For each chunk in `ORDER.md`, create a corresponding forum file keyed by chunk identifier, with the following header and nothing else:
+Before spawning any team agents, create the `forum/` directory at root. For each chunk in `ORDER.md`, create a corresponding forum file keyed by chunk identifier, with the following header and nothing else:
 
 ```
 Forum for chunk {chunk_identifier}
@@ -67,9 +67,9 @@ Before using any lemma name returned by these tools, verify it exists using `lea
 
 Working through the dependency layers specified in `ORDER.md` sequentially, and chunks within each layer in parallel:
 
-For each chunk, spawn DeclarationFormalizer subagents (many-to-one at your discretion). Subagents should use the chunk's forum file as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
+For each chunk, create a team of DeclarationFormalizer agents (many-to-one at your discretion). Team agents may themselves spawn subagents. Each team agent should use the chunk's forum file as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
 
-Subagents should:
+Each team agent should:
 - Formalize the declaration or statement of the chunk faithfully into Lean 4, consulting the corresponding semiformal chunk, the formalization plan in `PLAN.md`, and the forum
 - Try multiple strategies where appropriate
 - Check lake/lean compilation frequently, at their own discretion
@@ -86,7 +86,7 @@ Once all declarations compile successfully across all chunks, commit the target 
 
 Working through the same dependency layers sequentially, and chunks within each layer in parallel:
 
-For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents (many-to-one at your discretion). Subagents should continue using the chunk's forum file for communication.
+For each chunk that has a proof (theorems, lemmas, etc.), create a team of ProofFormalizer agents (many-to-one at your discretion). Team agents may themselves spawn subagents. Each team agent should continue using the chunk's forum file for communication.
 
 **Persistence**
 
@@ -101,11 +101,11 @@ Before using `sorry` on any chunk that is not an assumption type, you must have 
 
 Only after all of the above have been exhausted may `sorry` be used as a last resort. When it is, the agent must post to the forum a record of every approach tried and why each failed.
 
-Subagents should:
+Each team agent should:
 - Formalize the proof of the chunk faithfully into Lean 4, consulting the corresponding semiformal chunk, the formalization plan in `PLAN.md`, and the forum
 - Try multiple strategies where appropriate
 - Check lake/lean compilation frequently, at their own discretion
-- For assumption types, fill in `sorry` as the proof
+- For assumption types, prove however you need to if possible; use `sorry` only if a proof cannot be found
 - Do not use an external implementation (e.g. from Mathlib or an explored source) for any declaration that appears in the source as a non-assumption type — such declarations must be formalized from scratch
 
 If any API changes are made during the proof step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix.

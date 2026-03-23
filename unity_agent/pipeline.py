@@ -55,6 +55,11 @@ def _get_prompts_dir() -> Path:
     return Path(__file__).parent / "PROMPTS"
 
 
+def _get_teams_dir() -> Path:
+    """Get the TEAMS directory relative to this package."""
+    return Path(__file__).parent / "TEAMS"
+
+
 def _get_subagents_dir() -> Path:
     """Get the SUBAGENTS directory relative to this package."""
     return Path(__file__).parent / "SUBAGENTS"
@@ -181,8 +186,12 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             logging.critical("CRITICAL: cannot have recording enabled with silent enabled")
             exit(1)
 
+        # Select prompts directory
+        PROMPTS_DIR = _get_teams_dir() if parse_bool(claude_code_experimental_agent_teams) else _get_prompts_dir()
+        logging.info(f"Prompts directory: {PROMPTS_DIR}")
+
         # Set permissions
-        
+
         if no_bypass:
             PERMISSIONS="acceptEdits"
         else:
@@ -228,7 +237,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
     _console.rule("[bold blue]Generation Phase[/bold blue]")
     try:
         # Load generation phase system prompt and generator subagent prompt
-        with open(_get_prompts_dir() / "GENERATION.md", "r") as f:
+        with open(PROMPTS_DIR / "GENERATION.md", "r") as f:
             GENERATION_PROMPT = f.read()
         with open(_get_subagents_dir() / "GENERATION/GENERATOR.md", "r") as f:
             GENERATOR_SUBAGENT = f.read()
@@ -280,7 +289,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
     if not autofix and not context:
         try:
             # Load semiformalization phase system prompt and semiformalizer subagent prompt
-            with open(_get_prompts_dir() / "SEMIFORMALIZATION/FF.md", "r") as f:
+            with open(PROMPTS_DIR / "SEMIFORMALIZATION/FF.md", "r") as f:
                 SEMIFORMALIZATION_PROMPT = f.read()
             with open(_get_subagents_dir() / "SEMIFORMALIZATION/FF.md", "r") as f:
                 SEMIFORMALIZER_SUBAGENT = f.read()
@@ -327,7 +336,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
     elif autofix and not context:
         try:
             # Load semiformalization phase system prompt and semiformalizer subagent prompt
-            with open(_get_prompts_dir() / "SEMIFORMALIZATION/TF.md", "r") as f:
+            with open(PROMPTS_DIR / "SEMIFORMALIZATION/TF.md", "r") as f:
                 SEMIFORMALIZATION_PROMPT = f.read()
             with open(_get_subagents_dir() / "SEMIFORMALIZATION/TF.md", "r") as f:
                 SEMIFORMALIZER_SUBAGENT = f.read()
@@ -374,7 +383,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
     elif autofix and context:
         try:
             # Load semiformalization phase system prompt and semiformalizer subagent prompt
-            with open(_get_prompts_dir() / "SEMIFORMALIZATION/TT.md", "r") as f:
+            with open(PROMPTS_DIR / "SEMIFORMALIZATION/TT.md", "r") as f:
                 SEMIFORMALIZATION_PROMPT = f.read()
             with open(_get_subagents_dir() / "SEMIFORMALIZATION/TT.md", "r") as f:
                 SEMIFORMALIZER_SUBAGENT = f.read()
@@ -432,7 +441,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             if not recurse and not context:
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
-                    with open(_get_prompts_dir() / "EXPLORATION/FF.md", "r") as f:
+                    with open(PROMPTS_DIR / "EXPLORATION/FF.md", "r") as f:
                         EXPLORATION_PROMPT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/F.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
@@ -493,7 +502,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             elif not recurse and context:
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
-                    with open(_get_prompts_dir() / "EXPLORATION/FT.md", "r") as f:
+                    with open(PROMPTS_DIR / "EXPLORATION/FT.md", "r") as f:
                         EXPLORATION_PROMPT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/T.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
@@ -554,7 +563,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             elif recurse and not context:
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
-                    with open(_get_prompts_dir() / "EXPLORATION/TF.md", "r") as f:
+                    with open(PROMPTS_DIR / "EXPLORATION/TF.md", "r") as f:
                         EXPLORATION_PROMPT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/F.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
@@ -615,7 +624,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
             elif recurse and context:
                 try:
                     # Load exploration phase system prompt and explorer, semiformalizer, and exploration-generator subagent prompts
-                    with open(_get_prompts_dir() / "EXPLORATION/TT.md", "r") as f:
+                    with open(PROMPTS_DIR / "EXPLORATION/TT.md", "r") as f:
                         EXPLORATION_PROMPT = f.read()
                     with open(_get_subagents_dir() / "EXPLORATION/EXPLORER/T.md", "r") as f:
                         EXPLORER_SUBAGENT = f.read()
@@ -686,7 +695,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         if not context and iteration == 0:
             try:
                 # Load preparation phase system prompt
-                with open(_get_prompts_dir() / "PREPARATION/F.md", "r") as f:
+                with open(PROMPTS_DIR / "PREPARATION/F.md", "r") as f:
                     PREPARATION_PROMPT = f.read()
             
                 async for message in query(
@@ -725,7 +734,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         elif context or iteration > 0:
             try:
                 # Load preparation phase system prompt
-                with open(_get_prompts_dir() / "PREPARATION/T.md", "r") as f:
+                with open(PROMPTS_DIR / "PREPARATION/T.md", "r") as f:
                     PREPARATION_PROMPT = f.read()
             
                 async for message in query(
@@ -772,7 +781,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         if not context and iteration == 0:
             try:
                 # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
-                with open(_get_prompts_dir() / "FORMALIZATION/F.md", "r") as f:
+                with open(PROMPTS_DIR / "FORMALIZATION/F.md", "r") as f:
                     FORMALIZATION_PROMPT = f.read()
                 with open(_get_subagents_dir() / "FORMALIZATION/DECLARATIONFORMALIZER/F.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
@@ -826,7 +835,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         elif context or iteration > 0:
             try:
                 # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
-                with open(_get_prompts_dir() / "FORMALIZATION/T.md", "r") as f:
+                with open(PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
                     FORMALIZATION_PROMPT = f.read()
                 with open(_get_subagents_dir() / "FORMALIZATION/DECLARATIONFORMALIZER/T.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
@@ -888,7 +897,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         if not context and iteration == 0:
             try:
                 # Load critic phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
-                with open(_get_prompts_dir() / "CRITIC.md", "r") as f:
+                with open(PROMPTS_DIR / "CRITIC.md", "r") as f:
                     CRITIC_PROMPT = f.read()
                 with open(_get_subagents_dir() / "CRITIC/DECLARATIONFORMALIZER/F.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()
@@ -942,7 +951,7 @@ async def run_pipeline(source: str, project_dir: str, context: bool):
         elif context or iteration > 0:
             try:
                 # Load critic phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
-                with open(_get_prompts_dir() / "CRITIC.md", "r") as f:
+                with open(PROMPTS_DIR / "CRITIC.md", "r") as f:
                     CRITIC_PROMPT = f.read()
                 with open(_get_subagents_dir() / "CRITIC/DECLARATIONFORMALIZER/T.md", "r") as f:
                     DECLARATIONFORMALIZER_SUBAGENT = f.read()

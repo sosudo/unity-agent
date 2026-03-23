@@ -22,7 +22,7 @@ For each chunk, perform the following checks:
 
 **Spot fixes**
 
-For issues that are minor and localized, dispatch DeclarationFormalizer or ProofFormalizer subagents to make spot fixes as needed. After each spot fix:
+For issues that are minor and localized, dispatch a DeclarationFormalizer or ProofFormalizer team to make spot fixes as needed. Team agents may themselves spawn subagents. After each spot fix:
 - Update `semiformal/` if the fix involves an API change, and commit with a `CRITIC:` prefix
 - Update `language/` if the fix involves a spec change, committing `language/` before `semiformal/`
 - Commit the target Lean project with a `UNITY:` prefix
