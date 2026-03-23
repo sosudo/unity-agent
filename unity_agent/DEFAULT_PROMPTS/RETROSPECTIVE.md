@@ -9,6 +9,7 @@ Read the following in full before proceeding:
 - The compiled Lean project
 - All forum threads (use `forum_list` to enumerate, then `forum_read` per thread)
 - `REPORT.md`
+- `DECISIONS.md` (if it exists) — records key decisions from all prior phases
 - The git log (all commits, especially those prefixed `UNITY:`, `FORMALIZATION:`, `EXPLORATION:`, `CRITIC:`)
 - Existing library content in `{LIBRARY_DIR}` — read before writing to avoid duplicating existing entries
 - Helper scripts at `~/.unity/scripts/` — available for analyzing sorry patterns, axiom usage, and import minimization
@@ -114,6 +115,8 @@ Only record what is genuinely reusable or informative. A tactic entry is worth r
 ---
 
 **Commits**
+
+Before committing, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious observations about the run and their implications for future iterations.
 
 If you edited any files in `{SUBAGENTS_DIR}/`, commit those changes with a message prefixed `RETROSPECTIVE:`. Do not commit project notes or library files — those are outside the git repository.
 

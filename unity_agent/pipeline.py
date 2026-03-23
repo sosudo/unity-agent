@@ -325,6 +325,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         save_spec = parse_bool(os.getenv("SAVE_SPECIFICATION"))
         no_bypass = parse_bool(os.getenv("NO_BYPASS"))
         generation_budget = parse_float(os.getenv("GENERATION_BUDGET"))
+        validation_budget = parse_float(os.getenv("VALIDATION_BUDGET"))
         semiformalization_budget = parse_float(os.getenv("SEMIFORMALIZATION_BUDGET"))
         exploration_budget = parse_float(os.getenv("EXPLORATION_BUDGET"))
         preparation_budget = parse_float(os.getenv("PREPARATION_BUDGET"))
@@ -349,6 +350,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"SAVE_SPECIFICTION: {save_spec}")
         logging.info(f"NO_BYPASS: {no_bypass}")
         logging.info(f"GENERATION_BUDGET: {generation_budget}")
+        logging.info(f"VALIDATION_BUDGET: {validation_budget}")
         logging.info(f"SEMIFORMALIZATION_BUDGET: {semiformalization_budget}")
         logging.info(f"EXPLORATION_BUDGET: {exploration_budget}")
         logging.info(f"PREPARATION_BUDGET: {preparation_budget}")
@@ -589,6 +591,56 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             logging.info("Generation phase completed successfully!")
         except Exception as e:
             logging.critical(f"CRITICAL (generation phase): {e}")
+            exit(1)
+
+        # Validation phase
+        _console.rule("[bold blue]Validation Phase[/bold blue]")
+        try:
+            with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
+                VALIDATION_PROMPT = with_library(f.read())
+
+            async for message in query(
+                prompt=f"Validate the IR specification generated for the gathered content in `gathered/`.",
+                options=ClaudeAgentOptions(
+                    tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                    allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                    agents={**LIBRARY_SUBAGENTS},
+                    system_prompt=VALIDATION_PROMPT,
+                    mcp_servers=LEAN_MCP_SERVER,
+                    permission_mode=PERMISSIONS,
+                    continue_conversation=False,
+                    max_budget_usd=validation_budget,
+                    disallowed_tools=[],
+                    enable_file_checkpointing=True,
+                    model="sonnet",
+                    fallback_model="haiku",
+                    env={
+                        "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
+                        "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
+                        "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
+                        "ANTHROPIC_DEFAULT_OPUS_MODEL":os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+                        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+                    },
+                    extra_args={},
+                ),
+            ):
+                _log_agent_message(message)
+
+            try:
+                report_text = Path("VALIDATION_REPORT.md").read_text()
+                if "**Status:** INVALID" in report_text:
+                    logging.critical("CRITICAL (validation phase): IR validation failed. See VALIDATION_REPORT.md for details.")
+                    exit(1)
+            except FileNotFoundError:
+                logging.warning("No VALIDATION_REPORT.md found — proceeding anyway.")
+
+            logging.info("Validation phase completed successfully!")
+        except SystemExit:
+            raise
+        except Exception as e:
+            logging.critical(f"CRITICAL (validation phase): {e}")
             exit(1)
 
         # Semiformalization phase (always TT: autofix + context, required for Path 2)
@@ -918,7 +970,60 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     except Exception as e:
         logging.critical(f"CRITICAL (generation phase): {e}")
         exit(1)
-        
+
+    # Validation phase
+
+    _console.rule("[bold blue]Validation Phase[/bold blue]")
+    try:
+        with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
+            VALIDATION_PROMPT = with_library(f.read())
+
+        async for message in query(
+            prompt=f"Validate the IR specification generated for {source}.",
+            options=ClaudeAgentOptions(
+                tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                agents={**LIBRARY_SUBAGENTS},
+                system_prompt=VALIDATION_PROMPT,
+                mcp_servers=LEAN_MCP_SERVER,
+                permission_mode=PERMISSIONS,
+                continue_conversation=False,
+                max_budget_usd=validation_budget,
+                disallowed_tools=[],
+                enable_file_checkpointing=True,
+                model="sonnet",
+                fallback_model="haiku",
+                env={
+                    "ANTHROPIC_BASE_URL":os.getenv("ANTHROPIC_BASE_URL"),
+                    "ANTHROPIC_API_KEY":os.getenv("ANTHROPIC_API_KEY"),
+                    "ANTHROPIC_AUTH_TOKEN":os.getenv("ANTHROPIC_AUTH_TOKEN"),
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL":os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL":os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL":os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+                    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+                },
+                extra_args={},
+            ),
+        ):
+            _log_agent_message(message)
+
+        # Check validation result
+        try:
+            report_text = Path("VALIDATION_REPORT.md").read_text()
+            if "**Status:** INVALID" in report_text:
+                logging.critical("CRITICAL (validation phase): IR validation failed. See VALIDATION_REPORT.md for details.")
+                exit(1)
+        except FileNotFoundError:
+            logging.warning("No VALIDATION_REPORT.md found — proceeding anyway.")
+
+        logging.info("Validation phase completed successfully!")
+
+    except SystemExit:
+        raise
+    except Exception as e:
+        logging.critical(f"CRITICAL (validation phase): {e}")
+        exit(1)
+
     # Semiformalization phase
     
     _console.rule("[bold blue]Semiformalization Phase[/bold blue]")
