@@ -25,7 +25,7 @@ ROOT_DIR: Path = Path(".")
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _hot(post: dict) -> float:
-    score = post["upvotes"] - post["downvotes"]
+    score = post.get("upvotes", 0) - post.get("downvotes", 0)
     sign = 1 if score > 0 else (-1 if score < 0 else 0)
     return math.log10(max(abs(score), 1)) * sign + post["timestamp"] / 45000
 
@@ -36,7 +36,7 @@ def _sorted_posts(posts: list[dict], sort: str) -> list[dict]:
     if sort == "new":
         return sorted(posts, key=lambda p: p["timestamp"], reverse=True)
     if sort == "top":
-        return sorted(posts, key=lambda p: p["upvotes"] - p["downvotes"], reverse=True)
+        return sorted(posts, key=lambda p: p.get("upvotes", 0) - p.get("downvotes", 0), reverse=True)
     return posts
 
 
@@ -95,6 +95,8 @@ def _chunk_status(chunk: dict) -> str:
 def list_threads():
     threads = []
     for path in sorted(FORUM_DIR.glob("*.json")):
+        if path.name == "balances.json":
+            continue
         try:
             data = json.loads(path.read_text())
             last = max((p["timestamp"] for p in data["posts"]), default=data["created_at"])
@@ -115,12 +117,16 @@ def get_thread(thread_id: str, sort: str = "hot"):
     data = _load_thread(thread_id)
     if data is None:
         return JSONResponse({"error": "not found"}, status_code=404)
+    posts = data["posts"]
+    for p in posts:
+        p.setdefault("upvotes", 0)
+        p.setdefault("downvotes", 0)
     return JSONResponse({
         "thread_id": data["thread_id"],
         "title": data["title"],
         "description": data["description"],
-        "post_count": len(data["posts"]),
-        "posts": _sorted_posts(data["posts"], sort),
+        "post_count": len(posts),
+        "posts": _sorted_posts(posts, sort),
     })
 
 
