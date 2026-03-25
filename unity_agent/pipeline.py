@@ -446,7 +446,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     # ICRL hook: reward agents for forum participation and surface vote feedback
     _balances_path = Path.cwd() / "forum" / "balances.json"
 
-    def _forum_reward_hook(hook_input: dict, context: object) -> dict:
+    async def _forum_reward_hook(hook_input: dict, _tool_use_id: str | None, context: object) -> dict:
         tool_name = hook_input.get("tool_name", "")
         tool_input = hook_input.get("tool_input", {})
         if tool_name == "forum_post":
@@ -478,7 +478,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         _re.IGNORECASE,
     )
 
-    def _self_kill_guard_hook(hook_input: dict, _context: object) -> dict:
+    async def _self_kill_guard_hook(hook_input: dict, _tool_use_id: str | None, _context: object) -> dict:
         command = hook_input.get("tool_input", {}).get("command", "")
         if _KILL_PATTERN.search(command):
             return {
