@@ -316,6 +316,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         exploration = parse_bool(os.getenv("EXPLORATION"))
         recurse = parse_bool(os.getenv("RECURSE"))
         max_critic_iterations = parse_int(os.getenv("MAX_CRITIC_ITERATIONS"))
+        max_validation_iterations = parse_int(os.getenv("MAX_VALIDATION_ITERATIONS"))
         forum_port = parse_int(os.getenv("FORUM_PORT")) or 8080
         anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL")
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -348,6 +349,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"PREPARATION_BUDGET: {preparation_budget}")
         logging.info(f"FORMALIZATION_BUDGET: {formalization_budget}")
         logging.info(f"CRITIC_BUDGET: {critic_budget}")
+        logging.info(f"MAX_VALIDATION_ITERATIONS: {max_validation_iterations}")
         logging.info(f"SILENT: {silent}")
         logging.info(f"RECORDING: {recording}")
         logging.info(f"SAVE_SEMIFORMALIZATION: {save_semiformalization}")
@@ -527,86 +529,100 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             logging.critical(f"CRITICAL (exploration phase): {e}")
             exit(1)
 
-        # Generation phase
-        _console.rule("[bold blue]Generation Phase[/bold blue]")
-        try:
-            with open(ACTIVE_PROMPTS_DIR / "GENERATION.md", "r") as f:
-                GENERATION_PROMPT = with_library(f.read())
-            with open(_SUBAGENTS_DIR / "GENERATION/GENERATOR.md", "r") as f:
-                GENERATOR_SUBAGENT = f.read()
+        # Generation + Validation loop
+        validation_iteration = 0
+        while True:
+            # Generation phase
+            _console.rule("[bold blue]Generation Phase[/bold blue]")
+            try:
+                with open(ACTIVE_PROMPTS_DIR / "GENERATION.md", "r") as f:
+                    GENERATION_PROMPT = with_library(f.read())
+                with open(_SUBAGENTS_DIR / "GENERATION/GENERATOR.md", "r") as f:
+                    GENERATOR_SUBAGENT = f.read()
 
-            async for message in query(
-                prompt=f"Generate the specification language for the gathered mathematical content in `gathered/`.",
-                options=ClaudeAgentOptions(
-                    tools=_ALL_TOOLS,
-                    allowed_tools=_ALL_TOOLS,
-                    agents={
-                        "generator": AgentDefinition(
-                            description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
-                            prompt=GENERATOR_SUBAGENT,
-                            tools=_ALL_TOOLS
-                        ),
-                        **LIBRARY_SUBAGENTS
-                    },
-                    system_prompt=GENERATION_PROMPT,
-                    mcp_servers=LEAN_MCP_SERVER,
-                    permission_mode=PERMISSIONS,
-                    max_budget_usd=generation_budget,
-        
-                    enable_file_checkpointing=True,
-                    model="opus",
-                    fallback_model="sonnet",
-                    env=_agent_env,
-        
-                ),
-            ):
-                _log_agent_message(message)
+                generation_prompt = "Generate the specification language for the gathered mathematical content in `gathered/`."
+                if validation_iteration > 0:
+                    generation_prompt += " VALIDATION_REPORT.md contains feedback from the previous validation attempt — use it to refine the specification."
 
-            logging.info("Generation phase completed successfully!")
-        except Exception as e:
-            logging.critical(f"CRITICAL (generation phase): {e}")
-            exit(1)
+                async for message in query(
+                    prompt=generation_prompt,
+                    options=ClaudeAgentOptions(
+                        tools=_ALL_TOOLS,
+                        allowed_tools=_ALL_TOOLS,
+                        agents={
+                            "generator": AgentDefinition(
+                                description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
+                                prompt=GENERATOR_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            **LIBRARY_SUBAGENTS
+                        },
+                        system_prompt=GENERATION_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=generation_budget,
 
-        # Validation phase
-        _console.rule("[bold blue]Validation Phase[/bold blue]")
-        try:
-            with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
-                VALIDATION_PROMPT = with_library(f.read())
+                        enable_file_checkpointing=True,
+                        model="opus",
+                        fallback_model="sonnet",
+                        env=_agent_env,
 
-            async for message in query(
-                prompt=f"Validate the IR specification generated for the gathered content in `gathered/`.",
-                options=ClaudeAgentOptions(
-                    tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                    allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                    agents={**LIBRARY_SUBAGENTS},
-                    system_prompt=VALIDATION_PROMPT,
-                    mcp_servers=LEAN_MCP_SERVER,
-                    permission_mode=PERMISSIONS,
-                    max_budget_usd=validation_budget,
-        
-                    enable_file_checkpointing=True,
-                    model="sonnet",
-                    fallback_model="haiku",
-                    env=_agent_env,
-        
-                ),
-            ):
-                _log_agent_message(message)
+                    ),
+                ):
+                    _log_agent_message(message)
 
+                logging.info("Generation phase completed successfully!")
+            except Exception as e:
+                logging.critical(f"CRITICAL (generation phase): {e}")
+                exit(1)
+
+            # Validation phase
+            _console.rule("[bold blue]Validation Phase[/bold blue]")
+            try:
+                with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
+                    VALIDATION_PROMPT = with_library(f.read())
+
+                async for message in query(
+                    prompt=f"Validate the IR specification generated for the gathered content in `gathered/`.",
+                    options=ClaudeAgentOptions(
+                        tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                        allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                        agents={**LIBRARY_SUBAGENTS},
+                        system_prompt=VALIDATION_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=validation_budget,
+
+                        enable_file_checkpointing=True,
+                        model="sonnet",
+                        fallback_model="haiku",
+                        env=_agent_env,
+
+                    ),
+                ):
+                    _log_agent_message(message)
+
+                logging.info("Validation phase completed successfully!")
+            except SystemExit:
+                raise
+            except Exception as e:
+                logging.critical(f"CRITICAL (validation phase): {e}")
+                exit(1)
+
+            # Validation loop status check
             try:
                 report_text = Path("VALIDATION_REPORT.md").read_text()
-                if "**Status:** INVALID" in report_text:
-                    logging.critical("CRITICAL (validation phase): IR validation failed. See VALIDATION_REPORT.md for details.")
+                if "**Status:** INVALID" not in report_text:
+                    break
+                elif max_validation_iterations is not None and validation_iteration + 1 >= max_validation_iterations:
+                    logging.critical(f"CRITICAL (validation phase): IR validation failed after {max_validation_iterations} iteration(s). See VALIDATION_REPORT.md for details.")
                     exit(1)
+                else:
+                    validation_iteration += 1
+                    logging.info(f"Validator rejected specification — rerunning generator with feedback (iteration {validation_iteration + 1})...")
             except FileNotFoundError:
                 logging.warning("No VALIDATION_REPORT.md found — proceeding anyway.")
-
-            logging.info("Validation phase completed successfully!")
-        except SystemExit:
-            raise
-        except Exception as e:
-            logging.critical(f"CRITICAL (validation phase): {e}")
-            exit(1)
+                break
 
         # Semiformalization phase (always TT: autofix + context, required for Path 2)
         _console.rule("[bold blue]Semiformalization Phase[/bold blue]")
@@ -839,92 +855,103 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
     # ── Path 1 / normal mode ──────────────────────────────────────────────────
 
-    # Generation phase
-    
-    _console.rule("[bold blue]Generation Phase[/bold blue]")
-    try:
-        # Load generation phase system prompt and generator subagent prompt
-        with open(ACTIVE_PROMPTS_DIR / "GENERATION.md", "r") as f:
-            GENERATION_PROMPT = with_library(f.read())
-        with open(_SUBAGENTS_DIR / "GENERATION/GENERATOR.md", "r") as f:
-            GENERATOR_SUBAGENT = f.read()
-        
-        async for message in query(
-            prompt=f"Generate the specification language for {source}.",
-            options=ClaudeAgentOptions(
-                tools=_ALL_TOOLS,
-                allowed_tools=_ALL_TOOLS,
-                agents={
-                    "generator": AgentDefinition(
-                        description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
-                        prompt=GENERATOR_SUBAGENT,
-                        tools=_ALL_TOOLS
-                    ),
-                    **LIBRARY_SUBAGENTS
-                },
-                system_prompt=GENERATION_PROMPT,
-                mcp_servers=LEAN_MCP_SERVER,
-                permission_mode=PERMISSIONS,
-                max_budget_usd=generation_budget,
-    
-                enable_file_checkpointing=True,
-                model="opus",
-                fallback_model="sonnet",
-                env=_agent_env,
-    
-            ),
-        ):
-            _log_agent_message(message)
-                
-        logging.info("Generation phase completed successfully!")
+    # Generation + Validation loop
 
-    except Exception as e:
-        logging.critical(f"CRITICAL (generation phase): {e}")
-        exit(1)
+    validation_iteration = 0
+    while True:
 
-    # Validation phase
+        # Generation phase
+        _console.rule("[bold blue]Generation Phase[/bold blue]")
+        try:
+            # Load generation phase system prompt and generator subagent prompt
+            with open(ACTIVE_PROMPTS_DIR / "GENERATION.md", "r") as f:
+                GENERATION_PROMPT = with_library(f.read())
+            with open(_SUBAGENTS_DIR / "GENERATION/GENERATOR.md", "r") as f:
+                GENERATOR_SUBAGENT = f.read()
 
-    _console.rule("[bold blue]Validation Phase[/bold blue]")
-    try:
-        with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
-            VALIDATION_PROMPT = with_library(f.read())
+            generation_prompt = f"Generate the specification language for {source}."
+            if validation_iteration > 0:
+                generation_prompt += " VALIDATION_REPORT.md contains feedback from the previous validation attempt — use it to refine the specification."
 
-        async for message in query(
-            prompt=f"Validate the IR specification generated for {source}.",
-            options=ClaudeAgentOptions(
-                tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                agents={**LIBRARY_SUBAGENTS},
-                system_prompt=VALIDATION_PROMPT,
-                mcp_servers=LEAN_MCP_SERVER,
-                permission_mode=PERMISSIONS,
-                max_budget_usd=validation_budget,
-    
-                enable_file_checkpointing=True,
-                model="sonnet",
-                fallback_model="haiku",
-                env=_agent_env,
-    
-            ),
-        ):
-            _log_agent_message(message)
+            async for message in query(
+                prompt=generation_prompt,
+                options=ClaudeAgentOptions(
+                    tools=_ALL_TOOLS,
+                    allowed_tools=_ALL_TOOLS,
+                    agents={
+                        "generator": AgentDefinition(
+                            description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
+                            prompt=GENERATOR_SUBAGENT,
+                            tools=_ALL_TOOLS
+                        ),
+                        **LIBRARY_SUBAGENTS
+                    },
+                    system_prompt=GENERATION_PROMPT,
+                    mcp_servers=LEAN_MCP_SERVER,
+                    permission_mode=PERMISSIONS,
+                    max_budget_usd=generation_budget,
 
-        # Check validation result
+                    enable_file_checkpointing=True,
+                    model="opus",
+                    fallback_model="sonnet",
+                    env=_agent_env,
+
+                ),
+            ):
+                _log_agent_message(message)
+
+            logging.info("Generation phase completed successfully!")
+        except Exception as e:
+            logging.critical(f"CRITICAL (generation phase): {e}")
+            exit(1)
+
+        # Validation phase
+        _console.rule("[bold blue]Validation Phase[/bold blue]")
+        try:
+            with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
+                VALIDATION_PROMPT = with_library(f.read())
+
+            async for message in query(
+                prompt=f"Validate the IR specification generated for {source}.",
+                options=ClaudeAgentOptions(
+                    tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                    allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                    agents={**LIBRARY_SUBAGENTS},
+                    system_prompt=VALIDATION_PROMPT,
+                    mcp_servers=LEAN_MCP_SERVER,
+                    permission_mode=PERMISSIONS,
+                    max_budget_usd=validation_budget,
+
+                    enable_file_checkpointing=True,
+                    model="sonnet",
+                    fallback_model="haiku",
+                    env=_agent_env,
+
+                ),
+            ):
+                _log_agent_message(message)
+
+            logging.info("Validation phase completed successfully!")
+        except SystemExit:
+            raise
+        except Exception as e:
+            logging.critical(f"CRITICAL (validation phase): {e}")
+            exit(1)
+
+        # Validation loop status check
         try:
             report_text = Path("VALIDATION_REPORT.md").read_text()
-            if "**Status:** INVALID" in report_text:
-                logging.critical("CRITICAL (validation phase): IR validation failed. See VALIDATION_REPORT.md for details.")
+            if "**Status:** INVALID" not in report_text:
+                break
+            elif max_validation_iterations is not None and validation_iteration + 1 >= max_validation_iterations:
+                logging.critical(f"CRITICAL (validation phase): IR validation failed after {max_validation_iterations} iteration(s). See VALIDATION_REPORT.md for details.")
                 exit(1)
+            else:
+                validation_iteration += 1
+                logging.info(f"Validator rejected specification — rerunning generator with feedback (iteration {validation_iteration + 1})...")
         except FileNotFoundError:
             logging.warning("No VALIDATION_REPORT.md found — proceeding anyway.")
-
-        logging.info("Validation phase completed successfully!")
-
-    except SystemExit:
-        raise
-    except Exception as e:
-        logging.critical(f"CRITICAL (validation phase): {e}")
-        exit(1)
+            break
 
     # Semiformalization phase
     
