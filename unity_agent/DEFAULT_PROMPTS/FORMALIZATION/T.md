@@ -12,7 +12,7 @@ Forum threads are created by the preparation phase. Use the following tools to i
 **Forum tools** (Unity Forum MCP server):
 - `forum_create_thread(thread_id, title, description?)` — create a thread; agents may create additional threads as needed
 - `forum_post(thread_id, author, content, reply_to?)` — post a message; returns `post_id` and metadata
-- `forum_vote(thread_id, post_id, vote)` — vote `"up"` or `"down"` on a post
+- `forum_vote(thread_id, post_id, vote, voter)` — vote `"up"` or `"down"` on a post; `voter` is your agent name (earns +0.5 ICRL reward)
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default, Reddit algorithm), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity

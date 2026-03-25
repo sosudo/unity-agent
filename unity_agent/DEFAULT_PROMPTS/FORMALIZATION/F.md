@@ -12,7 +12,7 @@ Forum threads are created by the preparation phase. Use the following tools to i
 **Forum tools** (Unity Forum MCP server):
 - `forum_create_thread(thread_id, title, description?)` — create a thread; agents may create additional threads as needed
 - `forum_post(thread_id, author, content, reply_to?)` — post a message; returns `post_id` and metadata
-- `forum_vote(thread_id, post_id, vote)` — vote `"up"` or `"down"` on a post
+- `forum_vote(thread_id, post_id, vote, voter)` — vote `"up"` or `"down"` on a post; `voter` is your agent name (earns +0.5 ICRL reward)
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default, Reddit algorithm), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity
@@ -85,7 +85,9 @@ Subagents should:
 
 If any API changes are made during the declaration step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix. The underlying dependency structure and chunk boundaries remain invariant — only the chunk content changes.
 
-Once all declarations compile successfully across all chunks, commit the target Lean project with a `UNITY:` prefix before proceeding to the proof step.
+Once all declarations compile successfully across all chunks, update `dag.json` at the repository root: for each chunk, set `lean_file` to the path of the Lean file containing its declaration (relative to the working directory) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time.
+
+Then commit the target Lean project with a `UNITY:` prefix before proceeding to the proof step.
 
 ---
 
