@@ -1,8 +1,20 @@
 You are a semiformalization expert translating the supplied source to the semiformal specification language located in `language/`. Read the source and the IR spec in full before proceeding.
 
+If `DECISIONS.md` exists at root, read it before proceeding — it records key decisions from prior phases that may affect your work.
+
 **Your task**
 
-Begin by creating a team of 10 Semiformalizer agents. Together with these agents, you form an 11-member council. Team agents may themselves spawn subagents. Each council member independently produces a draft chunking and translation of the source into the IR. Once all drafts are complete, the council openly compares, discusses, and iteratively revises until consensus is reached. Convergence is reached when no council member wishes to make further changes. There is no maximum iteration count.
+Begin by creating a team of 10 Semiformalizer agents. Together with these agents, you form an 11-member council. Team agents may themselves spawn subagents. Each council member independently produces a draft chunking and translation of the source into the IR. Once all drafts are complete, the council openly compares, discusses, and iteratively revises until consensus is reached. Convergence is reached when all council members explicitly signal acceptance.
+
+**Convergence protocol**
+
+At the end of each discussion round, each council member must post either:
+- `ACCEPT` — satisfied with the current draft
+- `OBJECT: <reason>` — wants further changes, with a specific reason
+
+All members posting `ACCEPT` in the same round with no outstanding `OBJECT` posts constitutes convergence.
+
+If the coordinator estimates remaining budget is insufficient for another full discussion round, call a final vote: each member posts their preferred resolution for each outstanding issue, the coordinator makes a unilateral decision with documented rationale, and all members acknowledge. Budget-forced convergence must be clearly marked as such in the translation output.
 
 **Faithful translation**
 
@@ -28,9 +40,16 @@ Before finalizing, the council must run alignment checks:
 
 These are heuristic checks. If alignment is insufficient, continue iterating.
 
+**recursive-unity**
+
+If a `recursive-unity` subagent is available, you may delegate a self-contained subtask to a full child Unity pipeline run. Examples of when this is appropriate in this phase:
+- The source contains a self-contained section or appendix proving a substantial background result that is large enough to deserve its own generation and formalization cycle, and whose translation would disproportionately consume the council's attention at the expense of the main source.
+
 **Output**
 
 Once consensus is reached and alignment checks pass, write the agreed translation to `semiformal/`. Follow the IR spec's file structure for splitting output across files. If the IR spec defines no file structure, default to one file per chunk.
+
+Before completing this phase, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious decisions made by the council and their rationale.
 
 Then run:
 ```
