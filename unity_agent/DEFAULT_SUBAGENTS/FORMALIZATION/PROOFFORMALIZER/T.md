@@ -46,3 +46,5 @@ Report back to the main agent with:
 - The proofs you formalized and the strategies that worked
 - Any API changes made
 - Any unresolved issues, with a full log of approaches tried
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

@@ -20,3 +20,5 @@ Report back to the main agent with:
 - The declarations you were assigned
 - What was found for each (or novelty assessment if nothing found)
 - Where sources were saved in `gathered/`
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

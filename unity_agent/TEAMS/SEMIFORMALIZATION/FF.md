@@ -57,3 +57,5 @@ cd semiformal
 git add .
 git commit -m "semiformalization phase completed"
 ```
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

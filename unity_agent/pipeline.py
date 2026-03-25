@@ -491,9 +491,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         return {"continue_": True}
 
     FORUM_HOOKS = {
-        "PreToolUse": [
-            HookMatcher(matcher="Bash", hooks=[_self_kill_guard_hook])
-        ],
         "PostToolUse": [
             HookMatcher(matcher="forum_post|forum_vote", hooks=[_forum_reward_hook])
         ],

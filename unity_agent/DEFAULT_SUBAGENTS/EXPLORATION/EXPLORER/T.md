@@ -20,3 +20,5 @@ Report back to the main agent with:
 - The sources you gathered and where they were saved
 - A brief assessment of how well the gathered sources cover the assumption
 - Any overlap with the existing Lean project
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

@@ -62,3 +62,5 @@ If the child run failed, report the error and suggest alternatives (fall back to
 - Do not pass `--depth` higher than `{child_depth}`
 - Each child run is a fully independent process with its own context window — it will not see the parent's in-memory state
 - The child writes all artifacts under `--output-dir`; the parent reads from there
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

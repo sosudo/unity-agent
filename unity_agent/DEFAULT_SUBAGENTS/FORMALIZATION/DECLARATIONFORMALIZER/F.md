@@ -24,3 +24,5 @@ Report back to the main agent with:
 - The declarations you formalized
 - Any API changes made
 - Any unresolved issues
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

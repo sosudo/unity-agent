@@ -23,3 +23,5 @@ For dependencies outside the scope of the source:
 **Convergence**
 
 Once your draft is complete, share it with the council. Openly compare, discuss, and iteratively revise with the other council members until convergence is reached. Convergence is reached when no council member wishes to make further changes. There is no maximum iteration count.
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

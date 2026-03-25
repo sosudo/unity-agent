@@ -80,3 +80,5 @@ If a `recursive-unity` subagent is available, you may delegate a self-contained 
 Before completing this phase, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious decisions made and their rationale.
 
 Commit any modifications to `language/` before modifying `semiformal/`. Commit to `semiformal/` after each modification. All commits to both repos must be prefixed with `EXPLORATION:` followed by a message of your choice.
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

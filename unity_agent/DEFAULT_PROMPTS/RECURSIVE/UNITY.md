@@ -15,3 +15,5 @@ Whether to delegate to `recursive-unity` vs. handle the subtask with a regular s
 ## Depth limit
 
 Child runs are capped at a lower depth than this run. If the child depth reaches 0, the child pipeline has no further recursive capability. You will be told the current depth when `recursive-unity` is registered.
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

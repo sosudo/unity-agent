@@ -15,3 +15,5 @@ You may write files anywhere within `language/` as you deem appropriate. Coordin
 **Coordination**
 
 You may communicate with the main agent and other Generator subagents freely. You may spawn your own sub-subagents if you deem it necessary.
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
