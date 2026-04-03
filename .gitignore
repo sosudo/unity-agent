@@ -17,3 +17,5 @@ TODO
 .claude/
 .mcp.json
 forum/
+
+.DS_Store
