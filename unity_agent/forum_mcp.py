@@ -7,16 +7,33 @@ forum/<thread_id>.json. Run via:
 """
 
 import argparse
+import fcntl
 import json
 import math
+import re
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastmcp import FastMCP
 
 mcp = FastMCP("unity-forum")
 FORUM_DIR: Path = Path("forum")
+_MENTION_RE = re.compile(r'@([\w][\w-]*)')
+
+
+@contextmanager
+def _thread_lock(thread_id: str):
+    """Exclusive per-thread file lock so concurrent votes/posts are serialised."""
+    FORUM_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = FORUM_DIR / f"{thread_id}.lock"
+    with open(lock_path, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -166,6 +183,11 @@ def forum_post(
     (vote feedback received since your last post). Use post_id to vote on
     or redact this post later.
     """
+    with _thread_lock(thread_id):
+        return _forum_post_locked(thread_id, author, content, reply_to)
+
+
+def _forum_post_locked(thread_id: str, author: str, content: str, reply_to: str | None) -> dict:
     data = _load(thread_id)
     post = {
         "post_id": uuid.uuid4().hex[:8],
@@ -174,11 +196,16 @@ def forum_post(
         "timestamp": int(time.time()),
         "upvotes": 0,
         "downvotes": 0,
+        "voter_registry": {},
         "reply_to": reply_to,
         "redacted": False,
     }
     data["posts"].append(post)
     _save(data)
+    for m in _MENTION_RE.finditer(content):
+        mentioned = m.group(1)
+        if mentioned != author:
+            _push_notification(mentioned, 0.0, "mention", thread_id, post["post_id"], content[:100])
     rec = _credit(author, 0.5, "forum_post", thread_id, content[:100])
     notifications = _drain_notifications(author)
     result = {k: v for k, v in post.items()}
@@ -191,33 +218,93 @@ def forum_post(
 
 @mcp.tool()
 def forum_vote(thread_id: str, post_id: str, vote: str, voter: str = "unknown") -> dict:
-    """Vote on a post. vote must be 'up' or 'down'. voter should be your agent name.
+    """Vote on a post. vote must be 'up', 'down', or 'remove'. voter should be your agent name.
 
-    Credits +0.5 to voter and ±1 to the post author (delivered via their next
-    forum_post response). Returns updated vote counts and voter's icrl_balance.
+    Each voter may hold at most one vote per post at any time:
+    - 'up' when you have no vote: adds an upvote.
+    - 'up' when you already upvoted: removes your upvote (toggle off).
+    - 'up' when you already downvoted: removes your downvote and adds an upvote.
+    - 'down' when you have no vote: adds a downvote.
+    - 'down' when you already downvoted: removes your downvote (toggle off).
+    - 'down' when you already upvoted: removes your upvote and adds a downvote.
+    - 'remove': removes your existing vote, no-op if you have none.
+
+    Credits +0.5 to voter for any action that changes state. ICRL notifications
+    to the post author reflect the net delta (including reversals).
+    Returns updated vote counts, your current vote, and your icrl_balance.
     """
-    if vote not in ("up", "down"):
-        raise ValueError("vote must be 'up' or 'down'")
+    if vote not in ("up", "down", "remove"):
+        raise ValueError("vote must be 'up', 'down', or 'remove'")
+    with _thread_lock(thread_id):
+        return _forum_vote_locked(thread_id, post_id, vote, voter)
+
+
+def _forum_vote_locked(thread_id: str, post_id: str, vote: str, voter: str) -> dict:
     data = _load(thread_id)
     for post in data["posts"]:
         if post["post_id"] == post_id:
-            if vote == "up":
-                post["upvotes"] += 1
-            else:
-                post["downvotes"] += 1
-            _save(data)
+            registry = post.setdefault("voter_registry", {})
+            existing = registry.get(voter)  # "up", "down", or None
             excerpt = post["content"][:100]
             author = post["author"]
-            delta = +1.0 if vote == "up" else -1.0
-            event = "received_upvote" if vote == "up" else "received_downvote"
-            _push_notification(author, delta, event, thread_id, post_id, excerpt)
-            rec = _credit(voter, 0.5, f"forum_vote_{vote}", thread_id)
+
+            # Compute what changes
+            remove_old = existing is not None
+            add_new = vote != "remove" and vote != existing
+
+            if not remove_old and not add_new:
+                # No-op: remove with no existing vote
+                balances = _load_balances()
+                balance = balances.get(voter, {}).get("balance", 0.0)
+                return {
+                    "post_id": post_id,
+                    "upvotes": post["upvotes"],
+                    "downvotes": post["downvotes"],
+                    "your_vote": None,
+                    "icrl_balance": balance,
+                    "icrl_delta": 0,
+                    "action": "no_op",
+                }
+
+            # Apply removals
+            author_delta = 0.0
+            if remove_old:
+                if existing == "up":
+                    post["upvotes"] -= 1
+                    author_delta -= 1.0
+                else:
+                    post["downvotes"] -= 1
+                    author_delta += 1.0
+                del registry[voter]
+
+            # Apply new vote
+            if add_new:
+                registry[voter] = vote
+                if vote == "up":
+                    post["upvotes"] += 1
+                    author_delta += 1.0
+                else:
+                    post["downvotes"] += 1
+                    author_delta -= 1.0
+
+            _save(data)
+
+            # Notify author of net delta
+            if author_delta != 0.0:
+                event = "received_upvote" if author_delta > 0 else "received_downvote"
+                _push_notification(author, author_delta, event, thread_id, post_id, excerpt)
+
+            current_vote = registry.get(voter)
+            action = f"vote_{vote}" if add_new else f"removed_{existing}"
+            rec = _credit(voter, 0.5, f"forum_{action}", thread_id)
             return {
                 "post_id": post_id,
                 "upvotes": post["upvotes"],
                 "downvotes": post["downvotes"],
+                "your_vote": current_vote,
                 "icrl_balance": rec["balance"],
                 "icrl_delta": +0.5,
+                "action": action,
             }
     raise ValueError(f"Post '{post_id}' not found in thread '{thread_id}'.")
 
@@ -229,13 +316,14 @@ def forum_redact(thread_id: str, post_id: str) -> str:
     Use this when a post is outdated or wrong rather than letting stale
     information mislead other agents.
     """
-    data = _load(thread_id)
-    for post in data["posts"]:
-        if post["post_id"] == post_id:
-            post["redacted"] = True
-            post["content"] = "[REDACTED]"
-            _save(data)
-            return f"Post '{post_id}' redacted."
+    with _thread_lock(thread_id):
+        data = _load(thread_id)
+        for post in data["posts"]:
+            if post["post_id"] == post_id:
+                post["redacted"] = True
+                post["content"] = "[REDACTED]"
+                _save(data)
+                return f"Post '{post_id}' redacted."
     raise ValueError(f"Post '{post_id}' not found in thread '{thread_id}'.")
 
 

@@ -15,3 +15,5 @@ TODO
 
 # Claude files
 .claude/
+.mcp.json
+forum/

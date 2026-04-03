@@ -171,6 +171,7 @@ FORUM_HTML = """\
 <head>
 <title>unity forum</title>
 <meta charset="utf-8">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: monospace; font-size: 13px; background: #fff; color: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -198,8 +199,20 @@ main { display: flex; flex: 1; overflow: hidden; }
 .post { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid #ebebeb; }
 .post-meta { display: flex; align-items: baseline; gap: 12px; margin-bottom: 5px; font-size: 11px; color: #888; }
 .post-author { font-weight: bold; color: #000; font-size: 12px; }
-.post-content { white-space: pre-wrap; line-height: 1.6; font-size: 13px; }
-.post.redacted .post-content { color: #bbb; font-style: italic; }
+.post-content { line-height: 1.6; font-size: 13px; }
+.post-content p { margin-bottom: 0.6em; }
+.post-content p:last-child { margin-bottom: 0; }
+.post-content pre { background: #f6f6f6; padding: 8px 10px; overflow-x: auto; margin: 0.5em 0; }
+.post-content code { background: #f0f0f0; padding: 1px 4px; font-size: 12px; }
+.post-content pre code { background: none; padding: 0; }
+.post-content ul, .post-content ol { padding-left: 1.4em; margin-bottom: 0.5em; }
+.post-content blockquote { border-left: 3px solid #ddd; margin: 0 0 0.5em; padding-left: 10px; color: #666; }
+.post.redacted .post-content { color: #bbb; font-style: italic; white-space: pre-wrap; }
+.mention { background: #f0f4ff; color: #2255cc; padding: 1px 3px; border-radius: 2px; font-weight: bold; }
+.post-id-link { color: #ccc; font-size: 11px; text-decoration: none; }
+.post-id-link:hover { color: #888; }
+.reply-to-link { color: #aaa; font-size: 11px; text-decoration: none; }
+.reply-to-link:hover { color: #555; }
 .reply { margin-left: 20px; border-left: 2px solid #e8e8e8; padding-left: 14px; border-bottom: none; margin-bottom: 10px; padding-bottom: 0; }
 #placeholder { color: #aaa; padding: 20px 0; }
 </style>
@@ -222,6 +235,13 @@ main { display: flex; flex: 1; overflow: hidden; }
   <div id="panel"><div id="placeholder">select a thread</div></div>
 </main>
 <script>
+marked.use({ breaks: true, gfm: true });
+
+function renderContent(text) {
+  const html = marked.parse(text);
+  return html.replace(/@([\\w][\\w-]*)/g, '<span class="mention">@$1</span>');
+}
+
 let currentThread = null, currentSort = 'hot';
 
 document.querySelectorAll('.sort-tabs button').forEach(btn => {
@@ -256,12 +276,19 @@ async function loadSidebar() {
 
 function renderPost(p, depth) {
   const score = p.upvotes - p.downvotes;
-  return '<div class="post'+(depth>0?' reply':'')+(p.redacted?' redacted':'')+'">'
+  const replyLink = p.reply_to
+    ? '<a class="reply-to-link" href="#post-'+p.reply_to+'">&#8629; #'+p.reply_to+'</a>'
+    : '';
+  const content = p.redacted
+    ? '<div class="post-content">'+esc(p.content)+'</div>'
+    : '<div class="post-content">'+renderContent(p.content)+'</div>';
+  return '<div class="post'+(depth>0?' reply':'')+(p.redacted?' redacted':'')+'" id="post-'+p.post_id+'">'
     +'<div class="post-meta"><span class="post-author">'+esc(p.author)+'</span>'
+    +replyLink
     +'<span>&#8593;'+p.upvotes+' &#8595;'+p.downvotes+' ('+(score>=0?'+':'')+score+')</span>'
     +'<span>'+reltime(p.timestamp)+' ago</span>'
-    +'<span style="color:#ccc;font-size:11px">#'+p.post_id+'</span></div>'
-    +'<div class="post-content">'+esc(p.content)+'</div>'
+    +'<a class="post-id-link" href="#post-'+p.post_id+'">#'+p.post_id+'</a></div>'
+    +content
     +(p._replies||[]).map(r=>renderPost(r,depth+1)).join('')+'</div>';
 }
 
