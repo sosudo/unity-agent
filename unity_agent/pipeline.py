@@ -304,6 +304,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         # Set environment
         save_spec = parse_bool(os.getenv("SAVE_SPECIFICATION"))
         no_bypass = parse_bool(os.getenv("NO_BYPASS"))
+        source_scan_budget = parse_float(os.getenv("SOURCE_SCAN_BUDGET"))
         generation_budget = parse_float(os.getenv("GENERATION_BUDGET"))
         validation_budget = parse_float(os.getenv("VALIDATION_BUDGET"))
         semiformalization_budget = parse_float(os.getenv("SEMIFORMALIZATION_BUDGET"))
@@ -342,6 +343,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info("Environment:")
         logging.info(f"SAVE_SPECIFICATION: {save_spec}")
         logging.info(f"NO_BYPASS: {no_bypass}")
+        logging.info(f"SOURCE_SCAN_BUDGET: {source_scan_budget}")
         logging.info(f"GENERATION_BUDGET: {generation_budget}")
         logging.info(f"VALIDATION_BUDGET: {validation_budget}")
         logging.info(f"SEMIFORMALIZATION_BUDGET: {semiformalization_budget}")
@@ -914,6 +916,50 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         return 0
 
     # ── Path 1 / normal mode ──────────────────────────────────────────────────
+
+    # Source scan phase
+    if source is not None:
+        _console.rule("[bold blue]Source Scan Phase[/bold blue]")
+        try:
+            with open(_PROMPTS_DIR / "SOURCE_SCAN.md", "r") as f:
+                SOURCE_SCAN_PROMPT = with_library(f.read())
+            with open(_SUBAGENTS_DIR / "SOURCE_SCAN/SCANNER.md", "r") as f:
+                SCANNER_SUBAGENT = f.read()
+
+            scan_prompt = f"Scan {source} for mathematical claims and search Mathlib for each."
+            if context:
+                scan_prompt += f" An existing Lean project is present at {project_path} — also inventory its current Mathlib imports."
+
+            async for message in query(
+                prompt=scan_prompt,
+                options=ClaudeAgentOptions(
+                    tools=_ALL_TOOLS,
+                    allowed_tools=_ALL_TOOLS,
+                    agents={
+                        "scanner": AgentDefinition(
+                            description="Scanner subagent. Searches Mathlib for declarations relevant to a given mathematical claim.",
+                            prompt=SCANNER_SUBAGENT,
+                            tools=["Read", "WebSearch", "WebFetch"],
+                        ),
+                        **LIBRARY_SUBAGENTS
+                    },
+                    system_prompt=SOURCE_SCAN_PROMPT,
+                    permission_mode=PERMISSIONS,
+                    max_budget_usd=source_scan_budget,
+
+                    enable_file_checkpointing=True,
+                    model="sonnet",
+                    fallback_model="haiku",
+                    env=_agent_env,
+
+                ),
+            ):
+                _log_agent_message(message)
+
+            logging.info("Source scan phase completed successfully!")
+        except Exception as e:
+            logging.critical(f"CRITICAL (source scan phase): {e}")
+            exit(1)
 
     # Generation + Validation loop
 

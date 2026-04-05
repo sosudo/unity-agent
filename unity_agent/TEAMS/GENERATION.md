@@ -66,6 +66,14 @@ The following are non-exhaustive design considerations you may find useful:
 
 ---
 
+**Mathlib Context**
+
+If `mathlib-context.md` exists at root, read it before designing the IR. It records per-claim Mathlib coverage from a pre-scan of the source. Use it to inform both chunk structure and proof scaffolding:
+- `DIRECT` matches: the chunk may delegate to the existing Mathlib declaration; record the Mathlib module as an external dependency in the IR.
+- `PARTIAL` matches: encode the bridging proof structure explicitly — the IR must carry enough step decomposition for the formalization agent to connect source reasoning to the named Mathlib lemmas.
+- `NONE` matches: the chunk needs self-contained proof infrastructure; the IR must preserve full proof step detail.
+- If an existing Lean project is present, note which relevant Mathlib modules are `IMPORTED` vs. `NEEDS_IMPORT` — this affects feasibility ordering of chunks.
+
 **Library**
 
 Unity maintains a global library of IR designs from prior runs at `~/.unity/library/ir-patterns/`. Each entry records the source it was designed for, domain tags, key IR design decisions, and what worked or did not. If any relevant prior IR designs exist, they will be appended to this prompt as **Library Context** at the end. Consult them for inspiration — you are not bound by them.

@@ -63,6 +63,14 @@ The following are non-exhaustive design considerations you may find useful:
 
 ---
 
+**Mathlib Context**
+
+If `mathlib-context.md` exists at root, read it before designing the IR. It records per-declaration Mathlib coverage from a pre-scan of the source. Use it to inform chunk structure and declaration feasibility:
+- `DIRECT` matches: the chunk may reference the existing Mathlib declaration directly; record the Mathlib module as an external dependency. Formalization agents will decide whether to use it verbatim or prove independently.
+- `PARTIAL` matches: flag the relevant Mathlib modules in the chunk's dependency entry so formalization agents can leverage them.
+- `NONE` matches: no Mathlib shortcut exists; the chunk should carry full declaration detail so formalization agents have everything they need.
+- If an existing Lean project is present, note which relevant Mathlib modules are `IMPORTED` vs. `NEEDS_IMPORT` — prefer sequencing `IMPORTED` chunks earlier to reduce new import surface.
+
 **Library**
 
 Unity maintains a global library of IR designs from prior runs at `~/.unity/library/ir-patterns/`. If any are present, they will be listed in the manifest appended below — use the `Read` tool to access them. You are not bound by them.
