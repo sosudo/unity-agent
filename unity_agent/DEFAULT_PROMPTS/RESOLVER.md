@@ -57,7 +57,7 @@ After completing your fix, call `forum_create_thread("resolver", "Resolver")` (e
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity
-- `forum_tag(name, post_ids, tagger?, description?)` — attach a named tag to a set of posts
+- `forum_tag(name, post_ids, description?, tagger?)` — attach a named tag to a set of posts
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension

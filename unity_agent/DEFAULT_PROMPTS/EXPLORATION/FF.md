@@ -2,7 +2,7 @@ You are an exploration expert responsible for resolving assumption types in a se
 
 If `REPORT.md` exists at root, read it before proceeding — it contains the critic's assessment from the previous formalization attempt. Prioritize resolving assumption types related to the unresolved issues listed there.
 
-If `DECISIONS.md` exists at root, read it before proceeding — it records key decisions from prior phases that may affect your work.
+Call `forum_get_tag("decision")` to retrieve all decisions recorded by prior phases before proceeding.
 
 **Your task**
 
@@ -75,7 +75,7 @@ When an assumption type is successfully resolved to a Mathlib declaration, add i
 
 **Commits**
 
-Before completing this phase, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious decisions made and their rationale.
+Before completing this phase, post key non-obvious decisions to the relevant forum thread via `forum_post`, then tag those posts with `forum_tag(name="decision", post_ids=[...])` so future phases can retrieve them.
 
 Commit any modifications to `language/` before modifying `semiformal/`. Commit to `semiformal/` after each modification. All commits to both repos must be prefixed with `EXPLORATION:` followed by a message of your choice.
 
@@ -94,7 +94,7 @@ At the start, call `forum_create_thread("exploration", "Exploration")` (existing
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity
-- `forum_tag(name, post_ids, tagger?, description?)` — attach a named tag to a set of posts
+- `forum_tag(name, post_ids, description?, tagger?)` — attach a named tag to a set of posts
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension

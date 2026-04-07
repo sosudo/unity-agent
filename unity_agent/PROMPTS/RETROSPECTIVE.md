@@ -9,7 +9,6 @@ Read the following in full before proceeding:
 - The compiled Lean project
 - All forum threads (use `forum_list` to enumerate, then `forum_read` per thread) — use `sort="top"` to surface the highest-signal posts per thread
 - `REPORT.md`
-- `DECISIONS.md` (if it exists) — records key decisions from all prior phases
 - The git log (all commits, especially those prefixed `UNITY:`, `FORMALIZATION:`, `EXPLORATION:`, `CRITIC:`)
 - Existing library content in `{LIBRARY_DIR}` — read before writing to avoid duplicating existing entries
 - Helper scripts at `~/.unity/scripts/` — available for analyzing sorry patterns, axiom usage, and import minimization
@@ -116,7 +115,7 @@ Only record what is genuinely reusable or informative. A tactic entry is worth r
 
 **Commits**
 
-Before committing, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious observations about the run and their implications for future iterations.
+Before committing, post key non-obvious observations about the run and their implications to the global forum thread via `forum_post`, then tag those posts with `forum_tag(name="decision", post_ids=[...])` so future phases can retrieve them.
 
 If you edited any files in `{SUBAGENTS_DIR}/`, commit those changes with a message prefixed `RETROSPECTIVE:`. Do not commit project notes or library files — those are outside the git repository.
 
@@ -133,7 +132,7 @@ After completing all library and project-note writes, call `forum_create_thread(
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity
-- `forum_tag(name, post_ids, tagger?, description?)` — attach a named tag to a set of posts
+- `forum_tag(name, post_ids, description?, tagger?)` — attach a named tag to a set of posts
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension

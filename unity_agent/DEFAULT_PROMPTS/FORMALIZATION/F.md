@@ -5,7 +5,7 @@ If a `blueprint/` directory or `blueprint.xml` is present in the project root, c
 
 If `REPORT.md` exists at root, read it before proceeding — it contains the critic's assessment from the previous formalization attempt. Prioritize chunks with unresolved issues.
 
-If `DECISIONS.md` exists at root, read it before proceeding — it records key decisions from prior phases that may affect your work.
+Call `forum_get_tag("decision")` to retrieve all decisions recorded by prior phases before proceeding.
 
 **Pre-flight setup** (do this before the declaration step):
 
@@ -22,7 +22,7 @@ Use the following forum tools throughout:
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default, Reddit algorithm), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity
-- `forum_tag(name, post_ids, tagger?, description?)` — attach a named tag to a set of posts
+- `forum_tag(name, post_ids, description?, tagger?)` — attach a named tag to a set of posts
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
@@ -157,6 +157,6 @@ If a `recursive-unity` subagent is available, you may delegate a self-contained 
 
 **Commits**
 
-Before completing this phase, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious decisions made and their rationale.
+Before completing this phase, post key non-obvious decisions to the relevant forum thread via `forum_post`, then tag those posts with `forum_tag(name="decision", post_ids=[...])` so future phases can retrieve them.
 
 **IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

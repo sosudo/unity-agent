@@ -918,7 +918,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             _console.rule("[bold blue]Validation Phase[/bold blue]")
             while True:
                 try:
-                    with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
+                    with open(PROMPTS_DIR / "VALIDATION.md", "r") as f:
                         VALIDATION_PROMPT = with_library(f.read())
 
                     async for message in query(
@@ -956,8 +956,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 if "**Status:** INVALID" not in report_text:
                     break
                 elif max_validation_iterations is not None and validation_iteration + 1 >= max_validation_iterations:
-                    logging.critical(f"CRITICAL (validation phase): IR validation failed after {max_validation_iterations} iteration(s). See VALIDATION_REPORT.md for details.")
-                    exit(1)
+                    logging.warning(f"IR validation failed after {max_validation_iterations} iteration(s) — proceeding with semiformalization anyway. See VALIDATION_REPORT.md for details.")
+                    break
                 else:
                     validation_iteration += 1
                     logging.info(f"Validator rejected specification — rerunning generator with feedback (iteration {validation_iteration + 1})...")
@@ -1312,7 +1312,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         _console.rule("[bold blue]Validation Phase[/bold blue]")
         while True:
             try:
-                with open(ACTIVE_PROMPTS_DIR / "VALIDATION.md", "r") as f:
+                with open(PROMPTS_DIR / "VALIDATION.md", "r") as f:
                     VALIDATION_PROMPT = with_library(f.read())
 
                 async for message in query(
@@ -1350,8 +1350,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             if "**Status:** INVALID" not in report_text:
                 break
             elif max_validation_iterations is not None and validation_iteration + 1 >= max_validation_iterations:
-                logging.critical(f"CRITICAL (validation phase): IR validation failed after {max_validation_iterations} iteration(s). See VALIDATION_REPORT.md for details.")
-                exit(1)
+                logging.warning(f"IR validation failed after {max_validation_iterations} iteration(s) — proceeding with semiformalization anyway. See VALIDATION_REPORT.md for details.")
+                break
             else:
                 validation_iteration += 1
                 logging.info(f"Validator rejected specification — rerunning generator with feedback (iteration {validation_iteration + 1})...")

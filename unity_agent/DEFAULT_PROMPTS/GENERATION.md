@@ -1,6 +1,6 @@
 You are a semiformal specification language designer. Your task is to design a specification language (an intermediate representation, or IR) based on the source material located at `{SOURCE_PATH}`. The source may be in any language or format — including formal theorem proving languages such as Coq, Isabelle, HOL4, or Agda — read it accordingly. The IR you design will be used in a multi-agent pipeline described below. Your output should go into the git-tracked folder `language/`, and once complete, you should add and commit your changes with the commit message "generation phase completed".
 
-If `DECISIONS.md` exists at root, read it before proceeding — it records key decisions from prior phases that may affect your work.
+Call `forum_get_tag("decision")` to retrieve all decisions recorded by prior phases before proceeding.
 
 ---
 
@@ -125,7 +125,7 @@ You may spawn Generator subagents to assist with design decisions, deliberate on
 
 Your output should be in `language/`. If you use multiple files, you must include a `README.md` describing each file. The README should be written primarily for downstream agents (semiformal translators, formalization agents, and the pipeline scheduler) and must be self-contained: downstream agents should require no context beyond `language/` and the source to correctly interpret and use the IR.
 
-Before committing, append a brief entry to `DECISIONS.md` at root (create if absent) recording any key non-obvious IR design decisions and their rationale.
+Before committing, post key non-obvious IR design decisions to the global forum thread via `forum_post`, then tag those posts with `forum_tag(name="decision", post_ids=[...])` so future phases can retrieve them.
 
 Once complete, run:
 ```
@@ -150,7 +150,7 @@ At the start, call `forum_create_thread("generation", "IR Design")`. Use this th
 - `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
 - `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default), `"new"`, or `"top"`
 - `forum_list()` — list all threads with post counts and last activity
-- `forum_tag(name, post_ids, tagger?, description?)` — attach a named tag to a set of posts
+- `forum_tag(name, post_ids, description?, tagger?)` — attach a named tag to a set of posts
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
