@@ -115,7 +115,7 @@ Then commit the target Lean project with a `UNITY:` prefix before proceeding to 
 
 Working through the same dependency layers in `dag.json` sequentially, and chunks within each layer in parallel. Before beginning each layer, read the forum threads for all chunks in that layer using `forum_read` to incorporate any prior discussion or decisions from previous iterations.
 
-For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents with `isolation: "worktree"` (many-to-one at your discretion). Subagents should continue using the chunk's forum thread for communication — posting approaches, failed attempts, questions, and discoveries actively. Cross-chunk communication should go through the `global` thread. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
+For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents with `isolation: "worktree"` (many-to-one at your discretion). If the chunk JSON includes a `proof.sub_chunks` array, analyze its dependency graph: assign sub-chunks with no mutual dependencies to separate parallel ProofFormalizer subagents; assign sub-chunks that depend on earlier ones only after those complete. Subagents should continue using the chunk's forum thread for communication — posting approaches, failed attempts, questions, and discoveries actively. Cross-chunk communication should go through the `global` thread. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
 
 After all agents in the layer complete, merge and verify the same way as in the declaration step: sequential `git merge --no-ff` + `lake build`, resolver on failure, then worktree cleanup.
 
