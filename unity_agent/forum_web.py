@@ -980,6 +980,7 @@ function buildGraph(data) {
   chunks = {};
   data.chunks.forEach(c => { chunks[c.id] = c; });
   const elements = [];
+  const nodeIds = new Set(data.chunks.map(c => c.id));
   data.chunks.forEach(c => {
     const col = STATUS_COLOR[c.status] || STATUS_COLOR.grey;
     const elem = { data: {
@@ -992,7 +993,9 @@ function buildGraph(data) {
     if (nodePositions[c.id]) elem.position = nodePositions[c.id];
     elements.push(elem);
     (Array.isArray(c.dependencies) ? c.dependencies : (c.dependencies?.local || [])).forEach(dep => {
-      elements.push({ data: { id: dep+'->'+c.id, source: dep, target: c.id }});
+      if (nodeIds.has(dep)) {
+        elements.push({ data: { id: dep+'->'+c.id, source: dep, target: c.id }});
+      }
     });
   });
   const allPositionsKnown = data.chunks.length > 0 && data.chunks.every(c => nodePositions[c.id]);
@@ -1004,7 +1007,7 @@ function buildGraph(data) {
         'background-color': 'data(bgColor)', 'border-color': 'data(borderColor)', 'border-width': 1.5,
         'label': 'data(label)', 'font-family': 'ui-monospace, "Cascadia Code", "Fira Code", "Menlo", monospace', 'font-size': '11px',
         'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap',
-        'width': 'label', 'height': 'label', 'padding': '10px 14px', 'shape': 'roundrectangle', 'color': '#111',
+        'shape': 'roundrectangle', 'color': '#111', 'padding': '10px 14px',
         'min-zoomed-font-size': 7,
       }},
       { selector: 'node:selected', style: { 'border-width': 2.5, 'border-color': 'rgba(51,51,51,0.6)' }},
