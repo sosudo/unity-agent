@@ -23,7 +23,7 @@ The formalization agents will have access to both the source and the IR, so the 
 Your IR must have:
 
 1. **Chunking:** Each declaration (theorem statement, definition, lemma, etc.) must be its own chunk.
-2. **Dependency tracking:** Each chunk must declare its dependencies, including dependencies not present in the source (e.g. standard library lemmas, implicit assumptions). Dependencies must be represented in a machine-parseable DAG format suitable for direct use by the pipeline scheduler for topological sorting and parallelization.
+2. **Dependency tracking:** Each chunk must declare its dependencies in the `dependencies` field of its JSON file (chunk IDs only — see schema below). The pipeline scheduler reads these fields directly and runs a mechanical toposort to produce the authoritative DAG. Do **not** write a separate DAG file (e.g. `dependency-dag.json` or similar) — the pipeline owns the DAG and any hand-rolled DAG will be ignored.
 3. **Assumption typing:** Assumptions not explicitly stated in the source — whether theorems, lemmas, definitions, or axioms used implicitly — must be recorded with their assumption type (e.g. cited external result, standard library, implicit mathematical folklore, etc.).
 5. **Sub-chunk granularity:** Chunks must support subdivision, so that in the many-to-one agent case, multiple agents can work on different parts of a chunk (e.g. statement vs. proof) without conflicts.
 4. **Writeback schema:** The IR must include a schema for formalization-phase amendments, so that when formalization agents revise the semiformal translation, all agents use a consistent amendment convention. It must be clear which fields are owned by the semiformal phase and which may be modified by the formalization phase.
@@ -90,6 +90,7 @@ Schema:
 
 Field notes:
 - `id`: unique string, e.g. `chunk-{layer}-{index}` or a descriptive slug
+- `dependencies`: list of chunk IDs this chunk depends on — **only IDs from the same chunk set**; external dependencies (Mathlib, etc.) go in `mathlib_refs` or IR-level metadata, not here. The pipeline runs toposort on these fields — do not write a separate DAG file.
 - `type`: one of `theorem`, `lemma`, `definition`, `instance`, `structure`, `class`, `axiom`, `other`
 - `title`: short name used in forum threads and DAG visualizations
 - `proof`: **required for `theorem` and `lemma`; omit entirely for all other types**. `proof.strategy` and `proof.sub_chunks` are populated by the semiformalization phase — leave empty at generation time
@@ -117,11 +118,9 @@ You may spawn Generator subagents to assist with design decisions, deliberate on
 
 Your output should be in `language/`. If you use multiple files, you must include a `README.md` describing each file. The README should be written primarily for downstream agents (semiformal translators, formalization agents, and the pipeline scheduler) and must be self-contained: downstream agents should require no context beyond `language/` and the source to correctly interpret and use the IR.
 
-Once complete, run:
+Once complete, initialize `language/` as its own git repository and commit:
 ```
-cd language
-git add .
-git commit -m "generation phase completed"
+cd language && git init && git add . && git commit -m "generation phase completed"
 ```
 
 ---

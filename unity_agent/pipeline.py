@@ -341,7 +341,7 @@ async def _warm_lean_lsp(project_path: Path) -> None:
             warmup_file.write_text("import Mathlib\n\n#check Nat.add_comm\n")
             client = LeanLSPClient(str(project_path), initial_build=False)
             try:
-                client.get_diagnostics(str(warmup_file), inactivity_timeout=120.0)
+                client.get_diagnostics(".unity_lsp_warmup.lean", inactivity_timeout=120.0)
             finally:
                 try:
                     client.close()
@@ -1025,7 +1025,11 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
             # Formalization phase (always T variant: existing project always present)
             _console.rule("[bold blue]Formalization Phase[/bold blue]")
+            worktree_assignments: dict[str, str] = {}
             while True:
+                for cid, wt in list(worktree_assignments.items()):
+                    _cleanup_worktree(Path(wt), project_path, cid)
+                worktree_assignments = {}
                 try:
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
                         FORMALIZATION_PROMPT = with_library(f.read())
@@ -1036,7 +1040,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    worktree_assignments: dict[str, str] = {}
                     for layer in dag_layers:
                         for cid in layer:
                             wt = _create_worktree(cid, project_path)
@@ -1206,6 +1209,18 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             logging.warning("No REPORT.md found — critic may not have completed.")
         except Exception as e:
             logging.error(f"ERROR (summarization): {e}")
+
+        try:
+            if not save_spec:
+                spec_dir = Path("language")
+                if spec_dir.exists():
+                    shutil.rmtree(spec_dir)
+            if not save_semiformalization:
+                semiformal_dir = Path("semiformal")
+                if semiformal_dir.exists():
+                    shutil.rmtree(semiformal_dir)
+        except Exception as e:
+            logging.error(f"ERROR (clean up): {e}")
 
         logging.info("Unity has completed!")
         return 0
@@ -1747,7 +1762,11 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         _console.rule("[bold blue]Formalization Phase[/bold blue]")
 
         if not context and iteration == 0:
+            worktree_assignments: dict[str, str] = {}
             while True:
+                for cid, wt in list(worktree_assignments.items()):
+                    _cleanup_worktree(Path(wt), project_path, cid)
+                worktree_assignments = {}
                 try:
                     # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/F.md", "r") as f:
@@ -1759,7 +1778,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    worktree_assignments: dict[str, str] = {}
                     for layer in dag_layers:
                         for cid in layer:
                             wt = _create_worktree(cid, project_path)
@@ -1809,7 +1827,11 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as e:
                     await _invoke_resolver("formalization", e)
         elif context or iteration > 0:
+            worktree_assignments: dict[str, str] = {}
             while True:
+                for cid, wt in list(worktree_assignments.items()):
+                    _cleanup_worktree(Path(wt), project_path, cid)
+                worktree_assignments = {}
                 try:
                     # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
@@ -1821,7 +1843,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    worktree_assignments: dict[str, str] = {}
                     for layer in dag_layers:
                         for cid in layer:
                             wt = _create_worktree(cid, project_path)

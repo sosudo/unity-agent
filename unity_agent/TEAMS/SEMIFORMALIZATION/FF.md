@@ -67,11 +67,9 @@ Once consensus is reached and alignment checks pass, write the agreed translatio
 
 Before completing this phase, post key non-obvious council decisions to the relevant forum thread via `forum_post`, then tag those posts with `forum_tag(name="decision", post_ids=[...])` so future phases can retrieve them.
 
-Then run:
+Once complete, initialize `semiformal/` as its own git repository and commit:
 ```
-cd semiformal
-git add .
-git commit -m "semiformalization phase completed"
+cd semiformal && git init && git add . && git commit -m "semiformalization phase completed"
 ```
 
 **IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
