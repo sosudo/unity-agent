@@ -1188,7 +1188,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             # Loop status check
             try:
                 report_text = Path("REPORT.md").read_text()
-                if "**Status:** COMPLETE" in report_text:
+                if re.search(r"\*\*Status:\*\*\s+COMPLETE", report_text, re.IGNORECASE):
                     logging.info("Critic declared formalization complete.")
                     break
                 elif max_critic_iterations is not None and iteration + 1 >= max_critic_iterations:
@@ -2055,7 +2055,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         # Critic loop status check
         try:
             report_text = Path("REPORT.md").read_text()
-            if "**Status:** COMPLETE" in report_text:
+            if re.search(r"\*\*Status:\*\*\s+COMPLETE", report_text, re.IGNORECASE):
                 logging.info("Critic declared formalization complete.")
                 break
             elif max_critic_iterations is not None and iteration + 1 >= max_critic_iterations:

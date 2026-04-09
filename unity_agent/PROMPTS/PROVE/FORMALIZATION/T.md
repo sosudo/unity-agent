@@ -121,6 +121,12 @@ Then commit the target Lean project with a `UNITY:` prefix before proceeding to 
 
 Working through the same dependency layers sequentially, and chunks within each layer in parallel:
 
+Before spawning proof formalizers, re-create the git worktrees for each chunk from the current HEAD (which now contains all merged declarations). For each chunk, run:
+
+```bash
+git worktree add -b worktree/<safe_chunk_id> <worktree_path>
+```
+
 For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents (do NOT use `isolation: "worktree"`). Pass each subagent its assigned `worktree_path` from `worktree_assignments` and instruct it to work exclusively there. Subagents should continue using the chunk's forum thread for communication. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
 
 After all agents in the layer complete, merge and verify the same way as in the declaration step: sequential `git merge --no-ff` + `lake build`, resolver on failure, then worktree cleanup.
