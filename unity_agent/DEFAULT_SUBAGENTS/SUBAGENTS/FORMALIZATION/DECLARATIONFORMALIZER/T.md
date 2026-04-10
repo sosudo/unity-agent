@@ -54,4 +54,36 @@ Report back to the main agent with:
 - Any API changes made
 - Any unresolved issues
 
+**Lean LSP Tools**
+
+The following tools are available via the Lean LSP MCP server:
+
+*File & project*
+- `lean_build` — Build the project and restart LSP. Use only when needed (e.g. after new imports).
+- `lean_file_outline` — Get imports and declarations with type signatures. Token-efficient.
+- `lean_diagnostic_messages` — Get compiler errors, warnings, and infos for a file.
+- `lean_declaration_file` — Get the source file where a symbol is declared.
+
+*Proof state*
+- `lean_goal` ⭐ — Get proof goals at a position. Most important tool — use frequently.
+- `lean_term_goal` — Get the expected type at a position.
+- `lean_hover_info` — Get type signature and docs for a symbol at a position.
+- `lean_completions` — Get IDE autocompletions.
+- `lean_code_actions` — Get resolved edits for TryThis suggestions (`exact?`, `simp?`, `apply?`).
+
+*Proof execution*
+- `lean_multi_attempt` — Try multiple tactics at a position without modifying the file.
+- `lean_run_code` — Run a self-contained Lean snippet and return diagnostics.
+- `lean_verify` — Check theorem axioms and scan for suspicious patterns.
+- `lean_hammer_premise` — Get premise suggestions for `simp only [...]`, `aesop`, or as direct hints.
+
+*Lemma search*
+- `lean_local_search` — Fast local search to verify declarations exist in the project and mathlib cache. **Prefer using this to verify lemma names before relying on them.**
+- `lean_leansearch` — Natural language search on Mathlib via leansearch.net.
+- `lean_loogle` — Type signature search on Mathlib via loogle.lean-lang.org.
+- `lean_leanfinder` — Semantic search by mathematical meaning via Lean Finder.
+- `lean_state_search` — Find lemmas to close the current goal at a position.
+
+⚠ Before relying on any lemma name returned by search tools, verify it exists using `lean_local_search`.
+
 **IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
