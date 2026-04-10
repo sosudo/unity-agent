@@ -20,6 +20,14 @@ For dependencies outside the scope of the gathered sources:
 
 First converge per assumption with other Semiformalizer subagents assigned to the same assumption, then converge globally across all assumptions before writing output. Post drafts and convergence signals to the `exploration` thread with author `"EXPLORATION_SEMIFORMALIZER"`. Read `forum_read("exploration")` to see what other subagents have proposed.
 
+**ICRL — Forum Engagement**
+
+The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward engagement. Forum activity directly improves multi-agent coordination quality:
+- **At the start**: call `forum_check_balance("YOUR_ROLE_NAME")` to see your current balance
+- **Post actively**: share decisions, findings, proposals, and questions throughout your task — each post earns +0.5 ICRL credit
+- **Vote regularly**: after reading any thread, upvote posts that are accurate or informative (`"up"`), downvote misleading or incorrect ones (`"down"`) — each vote earns +0.5 credit; each upvote your posts receive earns you +1.0
+- **At the end**: check your balance again — a rising balance signals valued contributions; engage more if it stagnates
+
 **Forum**
 
 Use `forum_post`, `forum_read`, `forum_vote`, `forum_redact`, `forum_list` to coordinate — never write to `forum/` files directly.

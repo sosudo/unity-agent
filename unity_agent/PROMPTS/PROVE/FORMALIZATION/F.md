@@ -15,6 +15,14 @@ Call `forum_get_tag("decision")` to retrieve all decisions recorded by prior pha
 
 Use the following forum tools throughout:
 
+**ICRL — Forum Engagement**
+
+The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward engagement. Forum activity directly improves multi-agent coordination quality:
+- **At the start**: call `forum_check_balance("YOUR_ROLE_NAME")` to see your current balance
+- **Post actively**: share decisions, findings, proposals, and questions throughout your task — each post earns +0.5 ICRL credit
+- **Vote regularly**: after reading any thread, upvote posts that are accurate or informative (`"up"`), downvote misleading or incorrect ones (`"down"`) — each vote earns +0.5 credit; each upvote your posts receive earns you +1.0
+- **At the end**: check your balance again — a rising balance signals valued contributions; engage more if it stagnates
+
 **Forum tools** (Unity Forum MCP server):
 - `forum_create_thread(thread_id, title, description?)` — create a thread; call this to set up coordination threads before spawning subagents
 - `forum_post(thread_id, author, content, reply_to?)` — post a message; returns `post_id` and metadata
@@ -26,8 +34,7 @@ Use the following forum tools throughout:
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
-- `forum_set_dimensions(dimensions)` — set active vote dimensions for the run
-- `forum_check_balance(author)` — check an agent's ICRL credit balance
+- `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
 
 The target is a brand new Lake project. Initialize it as appropriate before proceeding.
 
@@ -86,7 +93,7 @@ Unity maintains a global library at `~/.unity/library/` and project-specific not
 
 Working through the dependency layers in `dag.json` at root sequentially, and chunks within each layer in parallel:
 
-For each chunk, spawn DeclarationFormalizer subagents (do NOT use `isolation: "worktree"` — the pipeline has already created isolated git worktrees). Pass each subagent its assigned `worktree_path` from the `worktree_assignments` provided in your prompt, and instruct it to work exclusively in that directory for all file operations. Subagents should use the chunk's forum thread as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
+For each chunk, spawn DeclarationFormalizer subagents with `isolation: "worktree"`. Subagents should use the chunk's forum thread as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
 
 Subagents should:
 - Formalize the declaration or statement of the chunk faithfully into Lean 4, consulting the corresponding semiformal chunk and the forum
@@ -96,10 +103,10 @@ Subagents should:
 
 If any API changes are made during the declaration step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix. The underlying dependency structure and chunk boundaries remain invariant — only the chunk content changes.
 
-Once all agents in the layer complete, merge each chunk's branch into the main repository sequentially in any order (chunks within a layer are DAG-independent). For each chunk, use the `worktree_path` from `worktree_assignments` and branch name `worktree/<safe_chunk_id>` (chunk ID with non-alphanumeric characters replaced by `_`):
+Once all agents in the layer complete, merge each chunk's branch into the main repository sequentially in any order (chunks within a layer are DAG-independent). For each completed agent, use the `(worktree_path, branch_name)` returned by the SDK:
 
 ```bash
-git merge --no-ff worktree/<safe_chunk_id>
+git merge --no-ff <branch_name>
 lake build 2>&1
 ```
 
@@ -107,7 +114,7 @@ If `lake build` fails, spawn a short-lived resolver subagent (without `isolation
 
 ```bash
 git worktree remove <worktree_path> --force
-git branch -d worktree/<safe_chunk_id>
+git branch -d <branch_name>
 ```
 
 Once all declarations compile successfully across all chunks, update `dag.json` at the repository root: for each chunk, set `lean_file` to the path of the Lean file containing its declaration (relative to the working directory) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time.
@@ -120,13 +127,7 @@ Then commit the target Lean project with a `UNITY:` prefix before proceeding to 
 
 Working through the same dependency layers sequentially, and chunks within each layer in parallel:
 
-Before spawning proof formalizers, re-create the git worktrees for each chunk from the current HEAD (which now contains all merged declarations). For each chunk, run:
-
-```bash
-git worktree add -b worktree/<safe_chunk_id> <worktree_path>
-```
-
-For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents (do NOT use `isolation: "worktree"`). Pass each subagent its assigned `worktree_path` from `worktree_assignments` and instruct it to work exclusively there. Subagents should continue using the chunk's forum thread for communication. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
+For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents with `isolation: "worktree"`. Subagents should continue using the chunk's forum thread for communication. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
 
 After all agents in the layer complete, merge and verify the same way as in the declaration step: sequential `git merge --no-ff` + `lake build`, resolver on failure, then worktree cleanup.
 

@@ -1025,11 +1025,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
             # Formalization phase (always T variant: existing project always present)
             _console.rule("[bold blue]Formalization Phase[/bold blue]")
-            worktree_assignments: dict[str, str] = {}
             while True:
-                for cid, wt in list(worktree_assignments.items()):
-                    _cleanup_worktree(Path(wt), project_path, cid)
-                worktree_assignments = {}
                 try:
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
                         FORMALIZATION_PROMPT = with_library(f.read())
@@ -1040,11 +1036,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    for layer in dag_layers:
-                        for cid in layer:
-                            wt = _create_worktree(cid, project_path)
-                            _symlink_lake_cache(wt, project_path)
-                            worktree_assignments[cid] = str(wt)
 
                     _formalization_agents = {
                         "declaration-formalizer": AgentDefinition(
@@ -1074,22 +1065,14 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         env=_agent_env,
                     )
 
-                    if dag_layers and worktree_assignments:
+                    if dag_layers:
                         for layer_idx, layer_ids in enumerate(dag_layers):
-                            layer_assignments = {cid: worktree_assignments[cid] for cid in layer_ids if cid in worktree_assignments}
                             layer_prompt = (
                                 f"Formalize the declarations in {project_path}. "
-                                f"Process DAG layer {layer_idx} chunks: {layer_ids}. "
-                                f"Worktree assignments: {json.dumps(layer_assignments)}"
+                                f"Process DAG layer {layer_idx} chunks: {layer_ids}."
                             )
                             async for message in query(prompt=layer_prompt, options=ClaudeAgentOptions(**_formalization_kwargs)):
                                 _log_agent_message(message)
-                            for cid in layer_ids:
-                                if cid in worktree_assignments:
-                                    _merge_worktree(Path(worktree_assignments[cid]), project_path, cid)
-                        _run(["lake", "build"], cwd=project_path)
-                        for cid, wt in worktree_assignments.items():
-                            _cleanup_worktree(Path(wt), project_path, cid)
                     else:
                         async for message in query(prompt=f"Formalize the declarations in {project_path}.", options=ClaudeAgentOptions(**_formalization_kwargs)):
                             _log_agent_message(message)
@@ -1762,11 +1745,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         _console.rule("[bold blue]Formalization Phase[/bold blue]")
 
         if not context and iteration == 0:
-            worktree_assignments: dict[str, str] = {}
             while True:
-                for cid, wt in list(worktree_assignments.items()):
-                    _cleanup_worktree(Path(wt), project_path, cid)
-                worktree_assignments = {}
                 try:
                     # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/F.md", "r") as f:
@@ -1776,20 +1755,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     with open(ACTIVE_SUBAGENTS_DIR / "FORMALIZATION/PROOFFORMALIZER/F.md", "r") as f:
                         PROOFFORMALIZER_SUBAGENT = f.read()
 
-                    dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
-                    dag_layers = dag_data.get("layers", [])
-                    for layer in dag_layers:
-                        for cid in layer:
-                            wt = _create_worktree(cid, project_path)
-                            _symlink_lake_cache(wt, project_path)
-                            worktree_assignments[cid] = str(wt)
-
-                    _formalization_prompt = f"Formalize {source} into {project_path}."
-                    if worktree_assignments:
-                        _formalization_prompt += f" Worktree assignments: {json.dumps(worktree_assignments)}"
-
                     async for message in query(
-                        prompt=_formalization_prompt,
+                        prompt=f"Formalize {source} into {project_path}.",
                         options=ClaudeAgentOptions(
                             tools=_ALL_TOOLS,
                             allowed_tools=_ALL_TOOLS,
@@ -1827,11 +1794,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as e:
                     await _invoke_resolver("formalization", e)
         elif context or iteration > 0:
-            worktree_assignments: dict[str, str] = {}
             while True:
-                for cid, wt in list(worktree_assignments.items()):
-                    _cleanup_worktree(Path(wt), project_path, cid)
-                worktree_assignments = {}
                 try:
                     # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
@@ -1843,11 +1806,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    for layer in dag_layers:
-                        for cid in layer:
-                            wt = _create_worktree(cid, project_path)
-                            _symlink_lake_cache(wt, project_path)
-                            worktree_assignments[cid] = str(wt)
 
                     _formalization_agents = {
                         "declaration-formalizer": AgentDefinition(
@@ -1877,22 +1835,14 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         env=_agent_env,
                     )
 
-                    if dag_layers and worktree_assignments:
+                    if dag_layers:
                         for layer_idx, layer_ids in enumerate(dag_layers):
-                            layer_assignments = {cid: worktree_assignments[cid] for cid in layer_ids if cid in worktree_assignments}
                             layer_prompt = (
                                 f"Formalize {source} into {project_path}. "
-                                f"Process DAG layer {layer_idx} chunks: {layer_ids}. "
-                                f"Worktree assignments: {json.dumps(layer_assignments)}"
+                                f"Process DAG layer {layer_idx} chunks: {layer_ids}."
                             )
                             async for message in query(prompt=layer_prompt, options=ClaudeAgentOptions(**_formalization_kwargs)):
                                 _log_agent_message(message)
-                            for cid in layer_ids:
-                                if cid in worktree_assignments:
-                                    _merge_worktree(Path(worktree_assignments[cid]), project_path, cid)
-                        _run(["lake", "build"], cwd=project_path)
-                        for cid, wt in worktree_assignments.items():
-                            _cleanup_worktree(Path(wt), project_path, cid)
                     else:
                         async for message in query(prompt=f"Formalize {source} into {project_path}.", options=ClaudeAgentOptions(**_formalization_kwargs)):
                             _log_agent_message(message)

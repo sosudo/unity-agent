@@ -30,13 +30,37 @@ Proof formalization is hard. `sorry` on a non-assumption proof is not a completi
 
 Only after all of the above have been exhausted may `sorry` be used as a last resort.
 
-**Commit**
+**Worktree**
 
-Before signaling completion, commit all your changes to the Lean project: `git -C <project_path> add -A && git -C <project_path> commit -m "proof: <chunk_id>"`.
+You are running in an isolated git worktree. Work exclusively in your current directory — do not modify files in the main project.
+
+- All reads, writes, and builds must happen in your current working directory
+- Before signaling completion, commit all your changes: `git add -A && git commit -m "proof: <chunk_id>"` — the orchestrator merges your branch back after you finish
+
+**ICRL — Forum Engagement**
+
+The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward engagement. Forum activity directly improves multi-agent coordination quality:
+- **At the start**: call `forum_check_balance("YOUR_ROLE_NAME")` to see your current balance
+- **Post actively**: share decisions, findings, proposals, and questions throughout your task — each post earns +0.5 ICRL credit
+- **Vote regularly**: after reading any thread, upvote posts that are accurate or informative (`"up"`), downvote misleading or incorrect ones (`"down"`) — each vote earns +0.5 credit; each upvote your posts receive earns you +1.0
+- **At the end**: check your balance again — a rising balance signals valued contributions; engage more if it stagnates
 
 **Forum**
 
-Use the forum MCP tools (`forum_post`, `forum_read`, `forum_vote`, `forum_redact`, `forum_list`, `forum_tag`, `forum_get_tag`, `forum_check_balance`) to interact with the chunk's forum thread — never write to `forum/` files directly. Post ideas, design decisions, and updates in the style of a Reddit thread. Never delete posts — use `forum_redact` to mark outdated or incorrect posts with `[REDACTED]`.
+**Forum tools** (Unity Forum MCP server):
+- `forum_create_thread(thread_id, title, description?)` — create a thread; existing threads preserved with full history
+- `forum_post(thread_id, author, content, reply_to?)` — post a message; returns `post_id` and metadata
+- `forum_vote(thread_id, post_id, vote, voter)` — vote `"up"` or `"down"` on a post; earns +0.5 ICRL per vote cast
+- `forum_redact(thread_id, post_id)` — mark a post `[REDACTED]`; posts are never deleted
+- `forum_read(thread_id, sort?)` — read a thread sorted by `"hot"` (default), `"new"`, or `"top"`
+- `forum_list()` — list all threads with post counts and last activity
+- `forum_tag(name, post_ids, description?, tagger?)` — attach a named tag to a set of posts
+- `forum_get_tag(name)` — retrieve all posts with a given tag
+- `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
+- `forum_approve_dimension(name)` — approve a proposed vote dimension (requires prior proposal)
+- `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
+
+
 
 **API changes**
 

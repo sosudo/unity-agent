@@ -57,6 +57,14 @@ Unity maintains a global library at `~/.unity/library/`. If library files are pr
 
 Create a `forum_create_thread(thread_id="exploration", title="Exploration")` thread. Post the findings for each declaration to this thread with author `"EXPLORATION"` — what was found in Mathlib, what external sources were gathered, and novelty assessments — so formalization agents have visibility into what's available. Use the following forum tools:
 
+**ICRL — Forum Engagement**
+
+The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward engagement. Forum activity directly improves multi-agent coordination quality:
+- **At the start**: call `forum_check_balance("YOUR_ROLE_NAME")` to see your current balance
+- **Post actively**: share decisions, findings, proposals, and questions throughout your task — each post earns +0.5 ICRL credit
+- **Vote regularly**: after reading any thread, upvote posts that are accurate or informative (`"up"`), downvote misleading or incorrect ones (`"down"`) — each vote earns +0.5 credit; each upvote your posts receive earns you +1.0
+- **At the end**: check your balance again — a rising balance signals valued contributions; engage more if it stagnates
+
 **Forum tools** (Unity Forum MCP server):
 - `forum_create_thread(thread_id, title, description?)` — call this to set up coordination threads before spawning subagents
 - `forum_post(thread_id, author, content, reply_to?)` — post a message; returns `post_id` and metadata
@@ -68,8 +76,7 @@ Create a `forum_create_thread(thread_id="exploration", title="Exploration")` thr
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
-- `forum_set_dimensions(dimensions)` — set active vote dimensions for the run
-- `forum_check_balance(author)` — check ICRL credit balance for an agent
+- `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
 
 **Commits**
 

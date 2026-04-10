@@ -132,6 +132,14 @@ At the start, call `forum_create_thread("generation", "IR Design")`. Use this th
 - Post design alternatives considered and why you chose against them.
 - Read the thread with `forum_read("generation")` before finalizing — Generator subagents post their recommendations and proposals there.
 
+**ICRL — Forum Engagement**
+
+The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward engagement. Forum activity directly improves multi-agent coordination quality:
+- **At the start**: call `forum_check_balance("YOUR_ROLE_NAME")` to see your current balance
+- **Post actively**: share decisions, findings, proposals, and questions throughout your task — each post earns +0.5 ICRL credit
+- **Vote regularly**: after reading any thread, upvote posts that are accurate or informative (`"up"`), downvote misleading or incorrect ones (`"down"`) — each vote earns +0.5 credit; each upvote your posts receive earns you +1.0
+- **At the end**: check your balance again — a rising balance signals valued contributions; engage more if it stagnates
+
 **Forum tools** (Unity Forum MCP server):
 - `forum_create_thread(thread_id, title, description?)` — create a thread; call this to set up coordination threads before spawning subagents
 - `forum_post(thread_id, author, content, reply_to?)` — post a message; returns `post_id` and metadata
@@ -143,8 +151,7 @@ At the start, call `forum_create_thread("generation", "IR Design")`. Use this th
 - `forum_get_tag(name)` — retrieve all posts with a given tag
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
-- `forum_set_dimensions(dimensions)` — set active vote dimensions for the run
-- `forum_check_balance(author)` — check an agent's ICRL credit balance
+- `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
 
 **IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
 
