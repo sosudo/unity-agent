@@ -69,7 +69,7 @@ Once all chunks have been checked and all spot fixes applied, produce `REPORT.md
 **Status declaration**
 
 At the end of `REPORT.md`, include exactly one of the following status lines:
-- `**Status:** COMPLETE` — all chunks passed or were spot-fixed with no unresolved issues remaining (or only minor issues that do not affect correctness).
+- `**Status:** COMPLETE` — all chunks passed or were spot-fixed with no unresolved issues remaining. A remaining `sorry` or `admit` on any non-assumption-type chunk, or any self-introduced axiom, always prevents COMPLETE regardless of scope.
 - `**Status:** NEEDS_REVISION` — unresolved issues remain that require re-exploration and re-formalization.
 
 **IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**

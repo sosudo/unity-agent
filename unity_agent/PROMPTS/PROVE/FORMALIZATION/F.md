@@ -93,7 +93,7 @@ Unity maintains a global library at `~/.unity/library/` and project-specific not
 
 Working through the dependency layers in `dag.json` at root sequentially, and chunks within each layer in parallel:
 
-For each chunk, spawn DeclarationFormalizer subagents with `isolation: "worktree"`. Subagents should use the chunk's forum thread as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
+For each chunk, spawn one DeclarationFormalizer subagent. The pipeline has pre-created an isolated git worktree per chunk; the layer prompt you receive includes a `Worktree assignments: {chunk_id: worktree_path}` JSON map. When spawning each subagent, include its assigned `worktree_path` in the spawn prompt and tell it to `cd` there before any read, write, or `lake build`. Subagents should use the chunk's forum thread as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
 
 Subagents should:
 - Formalize the declaration or statement of the chunk faithfully into Lean 4, consulting the corresponding semiformal chunk and the forum
@@ -103,19 +103,7 @@ Subagents should:
 
 If any API changes are made during the declaration step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix. The underlying dependency structure and chunk boundaries remain invariant — only the chunk content changes.
 
-Once all agents in the layer complete, merge each chunk's branch into the main repository sequentially in any order (chunks within a layer are DAG-independent). For each completed agent, use the `(worktree_path, branch_name)` returned by the SDK:
-
-```bash
-git merge --no-ff <branch_name>
-lake build 2>&1
-```
-
-If `lake build` fails, spawn a short-lived resolver subagent (without `isolation`) passing the build errors. The resolver must fix compilation issues only — reorder declarations, remove duplicate imports, resolve name conflicts — without changing any mathematical content. Once the build passes, clean up:
-
-```bash
-git worktree remove <worktree_path> --force
-git branch -d <branch_name>
-```
+When all agents in the layer complete, the pipeline merges each chunk's worktree branch back and runs `lake build` automatically — **do not merge, `lake build`, or remove worktrees yourself.** If the pipeline's post-layer build fails, a resolver subagent is spawned automatically by the pipeline.
 
 Once all declarations compile successfully across all chunks, update `dag.json` at the repository root: for each chunk, set `lean_file` to the path of the Lean file containing its declaration (relative to the working directory) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time.
 
@@ -127,9 +115,9 @@ Then commit the target Lean project with a `UNITY:` prefix before proceeding to 
 
 Working through the same dependency layers sequentially, and chunks within each layer in parallel:
 
-For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents with `isolation: "worktree"`. Subagents should continue using the chunk's forum thread for communication. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
+For each chunk that has a proof (theorems, lemmas, etc.), spawn ProofFormalizer subagents, passing each the `worktree_path` assigned to its chunk in the layer's `Worktree assignments` map (subagents must `cd` there before any work). Subagents should continue using the chunk's forum thread for communication. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
 
-After all agents in the layer complete, merge and verify the same way as in the declaration step: sequential `git merge --no-ff` + `lake build`, resolver on failure, then worktree cleanup.
+After all agents in the layer complete, the pipeline merges each chunk's worktree branch back and runs `lake build` automatically — **do not merge or remove worktrees yourself.** A resolver subagent is spawned automatically by the pipeline if the post-layer build fails.
 
 **Proof freedom**
 

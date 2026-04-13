@@ -40,7 +40,7 @@ If you make any API changes, report them to the main agent immediately so `semif
 
 **Worktree**
 
-You are running in an isolated git worktree. Work exclusively in your current directory — do not modify files in the main project.
+The orchestrator that spawned you has assigned you an isolated git worktree for your chunk. The worktree path is provided in your spawn prompt (look for a path under `.worktrees/` or labeled `worktree_path`). **Before doing anything else, `cd` to that path.** All reads, writes, and builds must happen inside that worktree — never modify files in the main project directory.
 
 - All reads, writes, and builds must happen in your current working directory
 - Before signaling completion, commit all your changes: `git add -A && git commit -m "declaration: <chunk_id>"` — the orchestrator merges your branch back after you finish

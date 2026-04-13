@@ -44,11 +44,13 @@ Your job is to diagnose the failure, repair the pipeline state, and leave things
 ## Forum
 
 Before diagnosing, check forum context:
-- Call `forum_list()` to see all threads.
+- Call `forum_list()` to see all threads that currently exist.
 - For formalization/critic failures, read the relevant chunk thread(s) with `forum_read("chunk-<id>")` — agents record design decisions, API proposals, and known issues there.
-- Read `forum_read("global")` for cross-chunk context.
+- If `"global"` appears in the thread list, read it with `forum_read("global")` for cross-chunk context. Do not call `forum_read("global")` if the thread does not exist yet — the global thread is only created by the formalization phase and will be absent for early-phase failures.
 
 After completing your fix, call `forum_create_thread("resolver", "Resolver")` (existing thread is preserved) and post your diagnosis and changes with author `"RESOLVER"`.
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
 
 **ICRL — Forum Engagement**
 

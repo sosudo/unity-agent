@@ -47,7 +47,7 @@ Your job is to diagnose the failure, repair the pipeline state, and leave things
 
 ## Forum
 
-Before diagnosing, check forum context — call `forum_list()` to see all threads, then read the relevant chunk or phase thread to understand what decisions were made before the failure. After completing your fix, post your diagnosis and changes to the `resolver` thread with author `"RESOLVER"`.
+Before diagnosing, check forum context — call `forum_list()` to see all threads that currently exist, then read the relevant chunk or phase thread to understand what decisions were made before the failure. Only call `forum_read("global")` if that thread appears in the list — it is created by the formalization phase and will be absent for early-phase failures. After completing your fix, post your diagnosis and changes to the `resolver` thread with author `"RESOLVER"`.
 
 **ICRL — Forum Engagement**
 
@@ -69,3 +69,5 @@ The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward 
 - `forum_propose_dimension(name, description, proposed_by)` — propose a new vote dimension
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
 - `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
