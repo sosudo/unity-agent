@@ -43,7 +43,7 @@ If you make any API changes, report them to the main agent immediately so `semif
 The orchestrator that spawned you has assigned you an isolated git worktree for your chunk. The worktree path is provided in your spawn prompt (look for a path under `.worktrees/` or labeled `worktree_path`). **Before doing anything else, `cd` to that path.** All reads, writes, and builds must happen inside that worktree — never modify files in the main project directory.
 
 - All reads, writes, and builds must happen in your current working directory
-- Before signaling completion, commit all your changes: `git add -A && git commit -m "declaration: <chunk_id>"` — the orchestrator merges your branch back after you finish
+- Before signaling completion, you MUST commit all your changes: `git add -A && git commit -m "FORMALIZATION: chunk <chunk_id>"`. If you return without committing, your worktree has nothing to merge and the orchestrator will re-spawn you — so committing is mandatory, not optional.
 
 **Output**
 

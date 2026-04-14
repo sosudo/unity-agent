@@ -35,7 +35,7 @@ Only after all of the above have been exhausted may `sorry` be used as a last re
 The orchestrator that spawned you has assigned you an isolated git worktree for your chunk. The worktree path is provided in your spawn prompt (look for a path under `.worktrees/` or labeled `worktree_path`). **Before doing anything else, `cd` to that path.** All reads, writes, and builds must happen inside that worktree — never modify files in the main project directory.
 
 - All reads, writes, and builds must happen in your current working directory
-- Before signaling completion, commit all your changes: `git add -A && git commit -m "proof: <chunk_id>"` — the orchestrator merges your branch back after you finish
+- Before signaling completion, you MUST commit all your changes: `git add -A && git commit -m "FORMALIZATION: chunk <chunk_id> proof"`. If you return without committing, your worktree has nothing to merge and the orchestrator will re-spawn you — so committing is mandatory, not optional.
 
 **ICRL — Forum Engagement**
 
@@ -68,7 +68,7 @@ If you make any API changes, report them to the main agent immediately so `semif
 
 **Chunk status update**
 
-After completing each chunk, update its JSON file in `semiformal/chunks/` (if it exists): set `lean_declaration.file` to the Lean file path (relative to working directory) and `lean_declaration.line` to the start line of the proof, and set `status` to `"complete"` if all sub-chunks are proven, or `"sorry"` if any remain unproven.
+After completing each chunk, update its JSON file at `<unity_run_dir>/semiformal/chunks/<chunk_id>.json` (if it exists). The unity run dir is the folder containing `semiformal/`, `dag.json`, `forum/` — it is **outside** your worktree, so use the absolute path passed in your spawn prompt, not a relative path from your CWD. Set `lean_declaration.file` to the Lean file path relative to the unity run dir (e.g. `myproj/MyProj/Foo.lean`), `lean_declaration.line` to the start line of the proof, and `status` to `"complete"` if all sub-chunks are proven, or `"sorry"` if any remain unproven.
 
 **Output**
 

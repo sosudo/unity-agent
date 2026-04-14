@@ -37,7 +37,7 @@ The orchestrator that spawned you has assigned you an isolated git worktree for 
 
 - All reads, writes, and builds must happen in your current working directory
 - Use `lake build ProjectName.AssignedModule 2>&1` (targeted build for your module) rather than a bare `lake build 2>&1` to avoid rebuilding the full project; fall back to `lake build 2>&1` only if the targeted build is not available
-- Before signaling completion, commit all your changes: `git add -A && git commit -m "proof: <chunk_id>"` — the orchestrator merges your branch back after you finish
+- Before signaling completion, you MUST commit all your changes: `git add -A && git commit -m "FORMALIZATION: chunk <chunk_id> proof"`. If you return without committing, your worktree has nothing to merge and the orchestrator will re-spawn you — so committing is mandatory, not optional.
 
 **ICRL — Forum Engagement**
 
@@ -70,7 +70,7 @@ If you make any API changes, report them to the main agent immediately so `semif
 
 **Chunk status update**
 
-After completing each chunk, update its JSON file in `semiformal/chunks/` (if it exists): set `lean_declaration.file` to the Lean file path (relative to working directory) and `lean_declaration.line` to the start line of the proof, and set `status` to `"complete"` if all sub-chunks are proven, or `"sorry"` if any remain unproven.
+After completing each chunk, update its JSON file at `<unity_run_dir>/semiformal/chunks/<chunk_id>.json` (if it exists). The unity run dir is the folder containing `semiformal/`, `dag.json`, `forum/` — it is **outside** your worktree, so use the absolute path passed in your spawn prompt, not a relative path from your CWD. Set `lean_declaration.file` to the Lean file path relative to the unity run dir (e.g. `myproj/MyProj/Foo.lean`), `lean_declaration.line` to the start line of the proof, and `status` to `"complete"` if all sub-chunks are proven, or `"sorry"` if any remain unproven.
 
 **Output**
 

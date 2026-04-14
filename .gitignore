@@ -17,6 +17,7 @@ a_forum/
 logs
 conv
 forum_sards/
+forum2/
 
 # Claude files
 .claude/

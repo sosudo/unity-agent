@@ -89,11 +89,22 @@ Unity maintains a global library at `~/.unity/library/` and project-specific not
 
 ---
 
+**Paths** (consistent across this phase):
+
+- Your working directory is the **unity run dir** — this is where `dag.json`, `worktrees.json`, `semiformal/`, `language/`, `gathered/`, and `forum/` live. It is **outside** the Lean project.
+- `<project_path>` is the Lean repository (a subdirectory of — or a sibling to — the unity run dir). Git merges, `lake build`, and inline fixes happen here: `cd <project_path>` before running them.
+- Worktrees live at `<project_path>/.worktrees/<safe_chunk_id>`.
+- In `dag.json`, each chunk's `lean_file` is a path **relative to the unity run dir** (the forum web UI resolves it via `ROOT_DIR / lean_file`), e.g. `myproj/MyProj/Foo.lean` when the Lean project is at `<unity_run_dir>/myproj/`.
+
+---
+
 **Declaration Step**
 
 Working through the dependency layers in `dag.json` (`layers` array) sequentially, and chunks within each layer in parallel. Before beginning each layer, read the forum threads for all chunks in that layer using `forum_read` to incorporate any prior discussion or decisions from previous iterations.
 
-For each chunk, spawn a team of DeclarationFormalizer agents. The pipeline has pre-created an isolated git worktree per chunk; the layer prompt you receive includes a `Worktree assignments: {chunk_id: worktree_path}` JSON map. When spawning the team for a chunk, include its assigned `worktree_path` in each team agent's spawn prompt and tell them to `cd` there before any read, write, or `lake build`. Team agents may themselves spawn subagents — those should also operate inside the same chunk worktree. Each team agent should use the chunk's forum thread as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
+**Worktree discovery.** The pipeline has pre-created one git worktree per chunk under `<project_path>/.worktrees/<safe_chunk_id>`, and written `worktrees.json` at the repository root (next to `dag.json`) mapping each `chunk_id` to `{worktree_path, branch, status}`. Read `worktrees.json` first to discover assignments. Since chunks within a layer are DAG-independent, a team working on chunk A may `Read` a layer-mate's worktree (e.g. `<project_path>/.worktrees/<other_safe_id>/`) for API cross-reference — this is safe.
+
+For each chunk in the current layer, spawn a team of DeclarationFormalizer agents. Include the chunk's `worktree_path` and `branch` from `worktrees.json` in each team agent's spawn prompt and require them to `cd` to that path before any read, write, or `lake build`. Team agents may themselves spawn subagents — those should also operate inside the same chunk worktree. The team must `git add -A && git commit -m "FORMALIZATION: chunk <id>"` in the worktree before returning — if a team returns without committing, its worktree has nothing to merge and you must re-spawn it with an instruction to commit. Each team agent should use the chunk's forum thread as a shared communication space — posting ideas, design decisions, API proposals, and updates as they work, in the style of a Reddit thread. Forum posts should never be deleted; if a post becomes outdated or wrong, mark it with `[REDACTED]` in place of its content.
 
 Each team agent should:
 - Formalize the declaration or statement of the chunk faithfully into Lean 4, consulting the corresponding semiformal chunk and the forum
@@ -104,9 +115,19 @@ Each team agent should:
 
 If any API changes are made during the declaration step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix. The underlying dependency structure and chunk boundaries remain invariant — only the chunk content changes.
 
-When all agents in the layer complete, the pipeline merges each chunk's worktree branch back and runs `lake build` automatically — **do not merge, `lake build`, or remove worktrees yourself.** If the pipeline's post-layer build fails, a resolver subagent is spawned automatically by the pipeline.
+**You own the merge.** When all teams in the layer complete, merge each chunk's worktree branch into the main project. For each chunk in the layer, from `<project_path>`:
 
-Once all declarations compile successfully across all chunks, update `dag.json` at the repository root: for each chunk, set `lean_file` to the path of the Lean file containing its declaration (relative to the working directory) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time.
+```bash
+git merge --squash <branch> && git commit -m "UNITY: merge chunk <id>"
+```
+
+If the squash-merge fails with a conflict, reason about it and fix it yourself. First run `git merge --abort` so the repo isn't stuck in a half-merged `MERGE_HEAD` state, then inspect the conflict (`git diff`, file contents, what both sides changed) and resolve it — either by editing the conflicted files, cherry-picking selectively, or re-doing the merge with `-X ours` / `-X theirs` if one side is clearly correct — and commit with the same `"UNITY: merge chunk <id>"` message so the audit detects the merge. Only re-spawn the chunk team if the conflict genuinely requires re-formalization (e.g. two chunks contradict each other semantically). Git conflicts are a merge-reasoning problem, not a resolver-phase problem.
+
+After all layer merges, run a build from `<project_path>` — prefer `lake build <ModuleName> 2>&1` for the specific module(s) touched this layer over a bare `lake build 2>&1`, which rebuilds the whole project and can take tens of minutes on Mathlib-heavy projects. If it fails, read the errors and choose emergently between: (a) patching inline in `<project_path>` if the fix is targeted (import order, rename, small typo) and re-running the targeted build, or (b) re-spawning the affected chunk's declaration-formalizer team with the build error in its spawn prompt so it retries inside its worktree — then re-merge and re-build. Do not proceed to the next layer until the build passes.
+
+Do not run `git worktree remove` yourself — the pipeline cleans up worktrees at end-of-phase.
+
+Once all declarations compile successfully across all chunks, update `dag.json` (at the unity run dir, your CWD): for each chunk, set `lean_file` to the path of the Lean file containing its declaration **relative to the unity run dir** (e.g. `myproj/MyProj/Foo.lean`, not `MyProj/Foo.lean` or an absolute path) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time.
 
 Then commit the target Lean project with a `UNITY:` prefix before proceeding to the proof step.
 
@@ -116,9 +137,9 @@ Then commit the target Lean project with a `UNITY:` prefix before proceeding to 
 
 Working through the same dependency layers in `dag.json` sequentially, and chunks within each layer in parallel. Before beginning each layer, read the forum threads for all chunks in that layer using `forum_read` to incorporate any prior discussion or decisions from previous iterations.
 
-For each chunk that has a proof (theorems, lemmas, etc.), spawn a team of ProofFormalizer agents, passing each team agent the `worktree_path` assigned to its chunk in the layer's `Worktree assignments` map (agents must `cd` there before any work). If the chunk JSON includes a `proof.sub_chunks` array, analyze its dependency graph: assign sub-chunks with no mutual dependencies to separate parallel ProofFormalizer subagents (all operating inside the same chunk worktree); assign sub-chunks that depend on earlier ones only after those complete. Team agents may themselves spawn subagents inside the same worktree. Each team agent should continue using the chunk's forum thread for communication — posting approaches, failed attempts, questions, and discoveries actively. Cross-chunk communication should go through the `global` thread. Use `Bash` with `lake build 2>&1` for compilation checks; do not call `lean_build`.
+For each chunk that has a proof (theorems, lemmas, etc.), spawn a team of ProofFormalizer agents. Read `worktrees.json` for the chunk's `worktree_path` and `branch`, pass both in each team agent's spawn prompt, and require them to `cd` to the worktree before any work. If the chunk JSON includes a `proof.sub_chunks` array, analyze its dependency graph: assign sub-chunks with no mutual dependencies to separate parallel ProofFormalizer subagents (all operating inside the same chunk worktree); assign sub-chunks that depend on earlier ones only after those complete. Team agents may themselves spawn subagents inside the same worktree. The team must `git add -A && git commit -m "FORMALIZATION: chunk <id> proof"` in the worktree before returning. Each team agent should continue using the chunk's forum thread for communication — posting approaches, failed attempts, questions, and discoveries actively. Cross-chunk communication should go through the `global` thread. Prefer Lean LSP tools (`lean_diagnostic_messages`, `lean_goal`, `lean_multi_attempt`) for incremental feedback; use `Bash` with `lake build 2>&1` sparingly; do not call `lean_build`.
 
-After all agents in the layer complete, the pipeline merges each chunk's worktree branch back and runs `lake build` automatically — **do not merge or remove worktrees yourself.** A resolver subagent is spawned automatically by the pipeline if the post-layer build fails.
+**You own the merge.** After all teams in the layer complete, merge and build the same way as in the declaration step: `git merge --squash <branch> && git commit -m "UNITY: merge chunk <id>"` for each chunk, then `lake build 2>&1`. On build failure, emergently choose between inline patching or re-spawning the affected chunk's proof-formalizer team with the build error. Do not proceed to the next layer until `lake build` passes. Do not run `git worktree remove` yourself — the pipeline cleans up at end-of-phase.
 
 **Persistence**
 

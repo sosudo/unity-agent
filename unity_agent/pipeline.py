@@ -57,7 +57,16 @@ def _log_agent_message(message) -> None:
 
 
 def _run(cmd, cwd=None):
-    subprocess.run(cmd, cwd=cwd, check=True)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logging.error(
+            f"Command failed (rc={result.returncode}): {' '.join(str(c) for c in cmd)}\n"
+            f"cwd: {cwd}\nstdout: {result.stdout.strip()}\nstderr: {result.stderr.strip()}"
+        )
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd, output=result.stdout, stderr=result.stderr,
+        )
+    return result
 
 
 _RATE_LIMIT_PATTERN = re.compile(
@@ -281,12 +290,37 @@ def _toposort_chunks(language_dir: Path) -> None:
 
 
 def _create_worktree(chunk_id: str, project_path: Path) -> Path:
-    """Create a git worktree for chunk_id alongside the project; return its path."""
+    """Create a git worktree for chunk_id inside the Lean project; return its path."""
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", chunk_id)
-    worktree_path = project_path.parent / ".worktrees" / safe_id
+    worktree_path = project_path / ".worktrees" / safe_id
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    gitignore = project_path / ".gitignore"
+    ignore_entry = ".worktrees/"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    if ignore_entry not in existing.splitlines():
+        with gitignore.open("a") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write(f"{ignore_entry}\n")
     _run(["git", "worktree", "add", "-b", f"worktree/{safe_id}", str(worktree_path)], cwd=project_path)
     return worktree_path
+
+
+def _write_worktrees_manifest(worktree_assignments: dict[str, str]) -> None:
+    """Write worktrees.json at CWD (next to dag.json) mapping chunk_id → worktree info."""
+    manifest = {
+        cid: {
+            "worktree_path": wt,
+            "branch": f"worktree/{re.sub(r'[^a-zA-Z0-9_-]', '_', cid)}",
+            "status": "pending",
+        }
+        for cid, wt in worktree_assignments.items()
+    }
+    Path("worktrees.json").write_text(json.dumps(manifest, indent=2))
+
+
+def _delete_worktrees_manifest() -> None:
+    Path("worktrees.json").unlink(missing_ok=True)
 
 
 def _symlink_lake_cache(worktree_path: Path, project_path: Path) -> None:
@@ -301,32 +335,117 @@ def _symlink_lake_cache(worktree_path: Path, project_path: Path) -> None:
         packages_link.symlink_to(packages_src.resolve())
 
 
-def _merge_worktree(worktree_path: Path, project_path: Path, chunk_id: str) -> None:
-    """Squash-merge the worktree branch into the main project."""
-    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", chunk_id)
-    try:
-        _run(["git", "merge", "--squash", f"worktree/{safe_id}"], cwd=project_path)
-    except subprocess.CalledProcessError as e:
-        logging.warning(f"git merge --squash for chunk {chunk_id} failed: {e}")
-        return
-    result = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project_path)
-    if result.returncode != 0:
-        _run(["git", "commit", "-m", f"formalize: merge worktree for chunk {chunk_id}"], cwd=project_path)
-    else:
-        logging.info(f"Worktree for chunk {chunk_id} had no changes to merge.")
+def _detect_main_branch(project_path: Path) -> str:
+    """Detect the default branch of the Lean project at startup."""
+    res = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=project_path, capture_output=True, text=True,
+    )
+    return res.stdout.strip() or "main"
+
+
+def _audit_worktree_commits(worktree_assignments: dict[str, str], project_path: Path, main_branch: str = "main") -> dict:
+    """Audit post-orchestrator state per chunk. Returns {chunk_id: {committed, merged, dirty}}.
+
+    - committed: subagent committed at least one chunk commit on the worktree branch
+    - merged:    main branch shows a "UNITY: merge chunk <chunk_id>" commit after the run
+    - dirty:     worktree still has uncommitted changes (subagent worked but never committed)
+    Issues a WARNING log per chunk that failed any expectation so silent work loss is surfaced.
+    """
+    report: dict = {}
+    for chunk_id, wt in worktree_assignments.items():
+        safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", chunk_id)
+        branch = f"worktree/{safe_id}"
+        wt_path = Path(wt)
+
+        dirty = False
+        committed = False
+        merged = False
+
+        if wt_path.exists():
+            status = subprocess.run(
+                ["git", "status", "--porcelain"], cwd=wt_path, capture_output=True, text=True,
+            )
+            dirty = status.returncode == 0 and bool(status.stdout.strip())
+
+        branch_exists = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=project_path,
+        ).returncode == 0
+        if branch_exists:
+            log_res = subprocess.run(
+                ["git", "log", f"{main_branch}..{branch}", "--oneline"],
+                cwd=project_path, capture_output=True, text=True,
+            )
+            committed = log_res.returncode == 0 and bool(log_res.stdout.strip())
+
+        merge_grep = subprocess.run(
+            ["git", "log", main_branch, "--grep", f"UNITY: merge chunk {chunk_id}", "--oneline"],
+            cwd=project_path, capture_output=True, text=True,
+        )
+        merged = merge_grep.returncode == 0 and bool(merge_grep.stdout.strip())
+
+        if dirty:
+            # Rescue: auto-commit the dirty changes on the worktree branch so work
+            # survives the upcoming `git worktree remove --force`. Broken code in
+            # git history is strictly better than deleted code.
+            add_res = subprocess.run(
+                ["git", "-C", str(wt_path), "add", "-A"], capture_output=True, text=True,
+            )
+            if add_res.returncode == 0:
+                commit_res = subprocess.run(
+                    ["git", "-C", str(wt_path), "commit", "-m",
+                     f"EMERGENCY: auto-commit dirty worktree for chunk {chunk_id}"],
+                    capture_output=True, text=True,
+                )
+                if commit_res.returncode == 0:
+                    logging.error(
+                        f"[audit] chunk {chunk_id}: RESCUED {wt_path} — subagent failed to commit; "
+                        f"work preserved via EMERGENCY commit on branch '{branch}'."
+                    )
+                    committed = True
+                    dirty = False
+                else:
+                    logging.warning(
+                        f"[audit] chunk {chunk_id}: rescue commit FAILED ({commit_res.stderr.strip()}); "
+                        f"work at {wt_path} will be LOST at cleanup."
+                    )
+            else:
+                logging.warning(
+                    f"[audit] chunk {chunk_id}: rescue `git add -A` FAILED ({add_res.stderr.strip()}); "
+                    f"work at {wt_path} will be LOST at cleanup."
+                )
+
+        report[chunk_id] = {"committed": committed, "merged": merged, "dirty": dirty}
+        if not committed and not merged:
+            logging.warning(
+                f"[audit] chunk {chunk_id}: no commits on branch '{branch}' beyond main and no "
+                f"merge commit on main — subagent likely returned without doing work."
+            )
+        elif committed and not merged:
+            logging.warning(
+                f"[audit] chunk {chunk_id}: branch '{branch}' has commits but orchestrator did not "
+                f"squash-merge them into main — merge step was skipped."
+            )
+        else:
+            logging.info(
+                f"[audit] chunk {chunk_id}: ok (committed={committed}, merged={merged}, dirty={dirty})"
+            )
+    return report
 
 
 def _cleanup_worktree(worktree_path: Path, project_path: Path, chunk_id: str) -> None:
-    """Remove the git worktree and its branch."""
+    """Remove the git worktree and its branch. Tolerant of missing branch. Raises on other failures."""
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", chunk_id)
-    try:
-        _run(["git", "worktree", "remove", "--force", str(worktree_path)], cwd=project_path)
-    except subprocess.CalledProcessError:
-        logging.warning(f"Could not remove worktree {worktree_path}.")
-    try:
-        _run(["git", "branch", "-D", f"worktree/{safe_id}"], cwd=project_path)
-    except subprocess.CalledProcessError:
-        logging.warning(f"Could not delete branch worktree/{safe_id}.")
+    _run(["git", "worktree", "remove", "--force", str(worktree_path)], cwd=project_path)
+    branch = f"worktree/{safe_id}"
+    ref_check = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=project_path,
+    )
+    if ref_check.returncode == 0:
+        _run(["git", "branch", "-D", branch], cwd=project_path)
+    else:
+        logging.info(f"Branch {branch} already gone — skipping delete.")
 
 
 async def _warm_lean_lsp(project_path: Path) -> None:
@@ -487,6 +606,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         max_validation_iterations = parse_int(os.getenv("MAX_VALIDATION_ITERATIONS"))
         forum_port = parse_int(os.getenv("FORUM_PORT")) or 8080
         lean_lsp_port = parse_int(os.getenv("LEAN_LSP_PORT")) or 6368
+        claude_code_stream_close_timeout = parse_int(os.getenv("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT")) or 180000
+        os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = str(claude_code_stream_close_timeout)
         anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL")
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         anthropic_auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN")
@@ -505,6 +626,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             "ANTHROPIC_DEFAULT_SONNET_MODEL": anthropic_default_sonnet_model,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": anthropic_default_haiku_model,
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": claude_code_experimental_agent_teams,
+            "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": str(claude_code_stream_close_timeout),
         }.items() if v}
 
         # Print environment
@@ -528,6 +650,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"RECURSE: {recurse}")
         logging.info(f"FORUM_PORT: {forum_port}")
         logging.info(f"LEAN_LSP_PORT: {lean_lsp_port}")
+        logging.info(f"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT: {claude_code_stream_close_timeout}")
         logging.info(f"ANTHROPIC_BASE_URL: {anthropic_base_url}")
         logging.info(f"ANTHROPIC_API_KEY: {anthropic_api_key}")
         logging.info(f"ANTHROPIC_AUTH_TOKEN: {anthropic_auth_token}")
@@ -607,36 +730,31 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     await asyncio.sleep(0)  # yield so the lake init thread starts before synchronous setup
     logging.info("lake cache + update running in background...")
 
-    # Launch lean-lsp-mcp once as a long-lived streamable-http server so every
-    # phase's query() attaches to an already-initialized server instead of
-    # re-spawning uvx lean-lsp-mcp (which races the SDK's initialize timeout
-    # while `lake serve` imports Mathlib).
-    import socket
-    _lean_lsp_proc = subprocess.Popen(
-        ["uvx", "lean-lsp-mcp",
-         "--transport", "streamable-http",
-         "--host", "127.0.0.1",
-         "--port", str(lean_lsp_port),
-         "--lean-project-path", str(project_path)],
-        cwd=str(project_path),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    atexit.register(_lean_lsp_proc.terminate)
+    # Detect the Lean project's default branch once; thread through worktree audit.
+    _main_branch = _detect_main_branch(project_path)
+    logging.info(f"Detected Lean project main branch: {_main_branch}")
 
-    # Wait for the port to accept connections (up to 60s).
-    _lsp_ready = False
-    for _ in range(120):
-        try:
-            with socket.create_connection(("127.0.0.1", lean_lsp_port), timeout=0.5):
-                _lsp_ready = True
-                break
-        except OSError:
-            await asyncio.sleep(0.5)
-    if not _lsp_ready:
-        logging.critical(f"CRITICAL: lean-lsp-mcp failed to bind 127.0.0.1:{lean_lsp_port}")
-        exit(1)
-    logging.info(f"lean-lsp-mcp listening on http://127.0.0.1:{lean_lsp_port}/mcp/")
+    # lean-lsp-mcp launch is deferred until AFTER `await _lake_init_task` so the
+    # lakefile / .lake/packages/ manifest is stable before `lake serve` reads it.
+    # See launch block further below.
+    _lean_lsp_proc = None  # set after lake init completes
+    _lean_lsp_stderr_path = Path.cwd() / "lean-lsp.stderr.log"
+
+    def _assert_lsp_alive(phase: str) -> None:
+        """Fail loud if the LSP subprocess died since last check."""
+        if _lean_lsp_proc is None:
+            return
+        if _lean_lsp_proc.poll() is not None:
+            tail = ""
+            try:
+                tail = _lean_lsp_stderr_path.read_text()[-2000:]
+            except Exception:
+                pass
+            logging.critical(
+                f"CRITICAL: lean-lsp-mcp died before phase '{phase}' "
+                f"(exit={_lean_lsp_proc.returncode}). stderr tail:\n{tail}"
+            )
+            exit(1)
 
     # Configure MCP servers for all agents
     LEAN_MCP_SERVER = {
@@ -842,6 +960,48 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.critical(f"CRITICAL (lake init): {e}")
         exit(1)
 
+    # Launch lean-lsp-mcp now that the lakefile / .lake/packages/ manifest is stable.
+    # Long-lived streamable-http server; every phase's query() attaches to this
+    # instance instead of re-spawning uvx lean-lsp-mcp. stderr is captured to a
+    # log file so startup / mid-run crashes are diagnosable (see _assert_lsp_alive).
+    import socket
+    _lean_lsp_stderr_file = open(_lean_lsp_stderr_path, "w")
+    _lean_lsp_proc = subprocess.Popen(
+        ["uvx", "lean-lsp-mcp",
+         "--transport", "streamable-http",
+         "--host", "127.0.0.1",
+         "--port", str(lean_lsp_port),
+         "--lean-project-path", str(project_path)],
+        cwd=str(project_path),
+        stdout=subprocess.DEVNULL,
+        stderr=_lean_lsp_stderr_file,
+    )
+    atexit.register(_lean_lsp_proc.terminate)
+
+    # Wait for the port to accept connections (up to 60s).
+    _lsp_ready = False
+    for _ in range(120):
+        if _lean_lsp_proc.poll() is not None:
+            try:
+                tail = _lean_lsp_stderr_path.read_text()[-2000:]
+            except Exception:
+                tail = ""
+            logging.critical(
+                f"CRITICAL: lean-lsp-mcp exited during startup "
+                f"(exit={_lean_lsp_proc.returncode}). stderr tail:\n{tail}"
+            )
+            exit(1)
+        try:
+            with socket.create_connection(("127.0.0.1", lean_lsp_port), timeout=0.5):
+                _lsp_ready = True
+                break
+        except OSError:
+            await asyncio.sleep(0.5)
+    if not _lsp_ready:
+        logging.critical(f"CRITICAL: lean-lsp-mcp failed to bind 127.0.0.1:{lean_lsp_port}")
+        exit(1)
+    logging.info(f"lean-lsp-mcp listening on http://127.0.0.1:{lean_lsp_port}/mcp/")
+
     _lsp_warmup_task = asyncio.create_task(_warm_lean_lsp(project_path))
     await asyncio.sleep(0)  # yield so the warmup thread starts immediately
     logging.info("Lean LSP warming up in background...")
@@ -859,6 +1019,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         # Exploration phase
         _console.rule("[bold blue]Exploration Phase[/bold blue]")
+        _assert_lsp_alive("exploration")
         while True:
             try:
                 with open(ACTIVE_PROMPTS_DIR / "EXPLORATION.md", "r") as f:
@@ -905,6 +1066,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         while True:
             # Generation phase
             _console.rule("[bold blue]Generation Phase[/bold blue]")
+            _assert_lsp_alive("generation")
             while True:
                 try:
                     with open(ACTIVE_PROMPTS_DIR / "GENERATION.md", "r") as f:
@@ -952,6 +1114,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
             # Validation phase
             _console.rule("[bold blue]Validation Phase[/bold blue]")
+            _assert_lsp_alive("validation")
             while True:
                 try:
                     with open(PROMPTS_DIR / "VALIDATION.md", "r") as f:
@@ -1011,6 +1174,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         # Semiformalization phase (always TT: autofix + context, required for Path 2)
         _console.rule("[bold blue]Semiformalization Phase[/bold blue]")
+        _assert_lsp_alive("semiformalization")
         while True:
             try:
                 with open(ACTIVE_PROMPTS_DIR / "SEMIFORMALIZATION/TT.md", "r") as f:
@@ -1057,10 +1221,14 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
             # Formalization phase (always T variant: existing project always present)
             _console.rule("[bold blue]Formalization Phase[/bold blue]")
+            _assert_lsp_alive("formalization")
             worktree_assignments: dict[str, str] = {}
             while True:
                 for cid, wt in list(worktree_assignments.items()):
-                    _cleanup_worktree(Path(wt), project_path, cid)
+                    try:
+                        _cleanup_worktree(Path(wt), project_path, cid)
+                    except Exception as cleanup_err:
+                        logging.warning(f"Pre-loop cleanup failed for {cid}: {cleanup_err}")
                 worktree_assignments = {}
                 try:
                     with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
@@ -1072,11 +1240,19 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    for layer in dag_layers:
+                    _total_chunks = sum(len(layer) for layer in dag_layers)
+                    logging.info(
+                        f"[prove-formalization] iteration={iteration}: creating worktrees for "
+                        f"{_total_chunks} chunk(s) across {len(dag_layers)} layer(s) under {project_path}/.worktrees/"
+                    )
+                    for layer_idx, layer in enumerate(dag_layers):
                         for cid in layer:
                             wt = _create_worktree(cid, project_path)
                             _symlink_lake_cache(wt, project_path)
                             worktree_assignments[cid] = str(wt)
+                            logging.info(f"[prove-formalization] layer {layer_idx}: worktree ready for chunk '{cid}' at {wt}")
+                    _write_worktrees_manifest(worktree_assignments)
+                    logging.info(f"[prove-formalization] worktrees.json written with {len(worktree_assignments)} assignment(s)")
 
                     _formalization_agents = {
                         "declaration-formalizer": AgentDefinition(
@@ -1106,38 +1282,38 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         env=_agent_env,
                     )
 
-                    if dag_layers and worktree_assignments:
-                        for layer_idx, layer_ids in enumerate(dag_layers):
-                            layer_assignments = {cid: worktree_assignments[cid] for cid in layer_ids if cid in worktree_assignments}
-                            layer_prompt = (
-                                f"Formalize the declarations in {project_path}. "
-                                f"Process DAG layer {layer_idx} chunks: {layer_ids}. "
-                                f"Worktree assignments: {json.dumps(layer_assignments)}"
-                            )
-                            async for message in query(prompt=layer_prompt, options=ClaudeAgentOptions(**_formalization_kwargs)):
-                                _log_agent_message(message)
-                            for cid in layer_ids:
-                                if cid in worktree_assignments:
-                                    _merge_worktree(Path(worktree_assignments[cid]), project_path, cid)
-                        _run(["lake", "build"], cwd=project_path)
-                        for cid, wt in worktree_assignments.items():
-                            _cleanup_worktree(Path(wt), project_path, cid)
-                        worktree_assignments = {}
-                    else:
-                        async for message in query(prompt=f"Formalize the declarations in {project_path}.", options=ClaudeAgentOptions(**_formalization_kwargs)):
-                            _log_agent_message(message)
+                    logging.info("[prove-formalization] invoking orchestrator query — agent will spawn per-chunk subagents, merge, and build")
+                    async for message in query(
+                        prompt=f"Formalize the declarations in {project_path}. Worktree assignments are in worktrees.json at the repository root.",
+                        options=ClaudeAgentOptions(**_formalization_kwargs),
+                    ):
+                        _log_agent_message(message)
+                    logging.info("[prove-formalization] orchestrator query returned — running post-run audit")
+
+                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+
+                    logging.info(f"[prove-formalization] cleaning up {len(worktree_assignments)} worktree(s)")
+                    for cid, wt in worktree_assignments.items():
+                        _cleanup_worktree(Path(wt), project_path, cid)
+                    worktree_assignments = {}
+                    _delete_worktrees_manifest()
 
                     logging.info("Formalization phase completed successfully!")
                     _commit_phase("formalization", {"iteration": iteration})
                     break
                 except Exception as e:
                     for cid, wt in list(worktree_assignments.items()):
-                        _cleanup_worktree(Path(wt), project_path, cid)
+                        try:
+                            _cleanup_worktree(Path(wt), project_path, cid)
+                        except Exception as cleanup_err:
+                            logging.warning(f"Cleanup failed for {cid} during error recovery: {cleanup_err}")
                     worktree_assignments = {}
+                    _delete_worktrees_manifest()
                     await _invoke_resolver("formalization", e)
 
             # Retrospective phase
             _console.rule("[bold blue]Retrospective Phase[/bold blue]")
+            _assert_lsp_alive("retrospective")
             try:
                 with open(PROMPTS_DIR / "RETROSPECTIVE.md", "r") as f:
                     RETROSPECTIVE_PROMPT = with_library(f.read().format(
@@ -1174,6 +1350,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
             # Critic phase (always T variant)
             _console.rule("[bold blue]Critic Phase[/bold blue]")
+            _assert_lsp_alive("critic")
             while True:
                 try:
                     with open(ACTIVE_PROMPTS_DIR / "CRITIC.md", "r") as f:
@@ -1266,6 +1443,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     # Source scan phase
     if source is not None:
         _console.rule("[bold blue]Source Scan Phase[/bold blue]")
+        _assert_lsp_alive("source scan")
         while True:
             try:
                 with open(_PROMPTS_DIR / "SOURCE_SCAN.md", "r") as f:
@@ -1318,6 +1496,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         # Generation phase
         _console.rule("[bold blue]Generation Phase[/bold blue]")
+        _assert_lsp_alive("generation")
         while True:
             try:
                 # Load generation phase system prompt and generator subagent prompt
@@ -1366,6 +1545,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         # Validation phase
         _console.rule("[bold blue]Validation Phase[/bold blue]")
+        _assert_lsp_alive("validation")
         while True:
             try:
                 with open(PROMPTS_DIR / "VALIDATION.md", "r") as f:
@@ -1426,6 +1606,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     # Semiformalization phase
 
     _console.rule("[bold blue]Semiformalization Phase[/bold blue]")
+
+    _assert_lsp_alive("semiformalization")
     if not autofix and not context:
         while True:
             try:
@@ -1563,6 +1745,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         if exploration:
             _console.rule("[bold blue]Exploration Phase[/bold blue]")
+            _assert_lsp_alive("exploration")
             if not recurse and not context:
                 while True:
                     try:
@@ -1797,11 +1980,16 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         _console.rule("[bold blue]Formalization Phase[/bold blue]")
 
+
+        _assert_lsp_alive("formalization")
         if not context and iteration == 0:
             worktree_assignments: dict[str, str] = {}
             while True:
                 for cid, wt in list(worktree_assignments.items()):
-                    _cleanup_worktree(Path(wt), project_path, cid)
+                    try:
+                        _cleanup_worktree(Path(wt), project_path, cid)
+                    except Exception as cleanup_err:
+                        logging.warning(f"Pre-loop cleanup failed for {cid}: {cleanup_err}")
                 worktree_assignments = {}
                 try:
                     # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
@@ -1814,16 +2002,25 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    for layer in dag_layers:
+                    _total_chunks = sum(len(layer) for layer in dag_layers)
+                    logging.info(
+                        f"[formalization F] iteration={iteration}: creating worktrees for "
+                        f"{_total_chunks} chunk(s) across {len(dag_layers)} layer(s) under {project_path}/.worktrees/"
+                    )
+                    for layer_idx, layer in enumerate(dag_layers):
                         for cid in layer:
                             wt = _create_worktree(cid, project_path)
                             _symlink_lake_cache(wt, project_path)
                             worktree_assignments[cid] = str(wt)
+                            logging.info(f"[formalization F] layer {layer_idx}: worktree ready for chunk '{cid}' at {wt}")
+                    _write_worktrees_manifest(worktree_assignments)
+                    logging.info(f"[formalization F] worktrees.json written with {len(worktree_assignments)} assignment(s)")
 
                     _formalization_prompt = f"Formalize {source} into {project_path}."
                     if worktree_assignments:
-                        _formalization_prompt += f" Worktree assignments: {json.dumps(worktree_assignments)}"
+                        _formalization_prompt += " Worktree assignments are in worktrees.json at the repository root."
 
+                    logging.info("[formalization F] invoking orchestrator query — agent will spawn per-chunk subagents, merge, and build")
                     async for message in query(
                         prompt=_formalization_prompt,
                         options=ClaudeAgentOptions(
@@ -1856,28 +2053,36 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         ),
                     ):
                         _log_agent_message(message)
+                    logging.info("[formalization F] orchestrator query returned — running post-run audit")
 
-                    for cid, wt in worktree_assignments.items():
-                        _merge_worktree(Path(wt), project_path, cid)
-                    if worktree_assignments:
-                        _run(["lake", "build"], cwd=project_path)
+                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+
+                    logging.info(f"[formalization F] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
                         _cleanup_worktree(Path(wt), project_path, cid)
                     worktree_assignments = {}
+                    _delete_worktrees_manifest()
 
                     logging.info("Formalization phase completed successfully!")
                     _commit_phase("formalization", {"iteration": iteration})
                     break
                 except Exception as e:
                     for cid, wt in list(worktree_assignments.items()):
-                        _cleanup_worktree(Path(wt), project_path, cid)
+                        try:
+                            _cleanup_worktree(Path(wt), project_path, cid)
+                        except Exception as cleanup_err:
+                            logging.warning(f"Cleanup failed for {cid} during error recovery: {cleanup_err}")
                     worktree_assignments = {}
+                    _delete_worktrees_manifest()
                     await _invoke_resolver("formalization", e)
         elif context or iteration > 0:
             worktree_assignments: dict[str, str] = {}
             while True:
                 for cid, wt in list(worktree_assignments.items()):
-                    _cleanup_worktree(Path(wt), project_path, cid)
+                    try:
+                        _cleanup_worktree(Path(wt), project_path, cid)
+                    except Exception as cleanup_err:
+                        logging.warning(f"Pre-loop cleanup failed for {cid}: {cleanup_err}")
                 worktree_assignments = {}
                 try:
                     # Load formalization phase system prompt and declaration-formalizer and proof-formalizer subagent prompts
@@ -1890,11 +2095,19 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
-                    for layer in dag_layers:
+                    _total_chunks = sum(len(layer) for layer in dag_layers)
+                    logging.info(
+                        f"[formalization T] iteration={iteration}: creating worktrees for "
+                        f"{_total_chunks} chunk(s) across {len(dag_layers)} layer(s) under {project_path}/.worktrees/"
+                    )
+                    for layer_idx, layer in enumerate(dag_layers):
                         for cid in layer:
                             wt = _create_worktree(cid, project_path)
                             _symlink_lake_cache(wt, project_path)
                             worktree_assignments[cid] = str(wt)
+                            logging.info(f"[formalization T] layer {layer_idx}: worktree ready for chunk '{cid}' at {wt}")
+                    _write_worktrees_manifest(worktree_assignments)
+                    logging.info(f"[formalization T] worktrees.json written with {len(worktree_assignments)} assignment(s)")
 
                     _formalization_agents = {
                         "declaration-formalizer": AgentDefinition(
@@ -1924,34 +2137,33 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         env=_agent_env,
                     )
 
-                    if dag_layers and worktree_assignments:
-                        for layer_idx, layer_ids in enumerate(dag_layers):
-                            layer_assignments = {cid: worktree_assignments[cid] for cid in layer_ids if cid in worktree_assignments}
-                            layer_prompt = (
-                                f"Formalize {source} into {project_path}. "
-                                f"Process DAG layer {layer_idx} chunks: {layer_ids}. "
-                                f"Worktree assignments: {json.dumps(layer_assignments)}"
-                            )
-                            async for message in query(prompt=layer_prompt, options=ClaudeAgentOptions(**_formalization_kwargs)):
-                                _log_agent_message(message)
-                            for cid in layer_ids:
-                                if cid in worktree_assignments:
-                                    _merge_worktree(Path(worktree_assignments[cid]), project_path, cid)
-                        _run(["lake", "build"], cwd=project_path)
-                        for cid, wt in worktree_assignments.items():
-                            _cleanup_worktree(Path(wt), project_path, cid)
-                        worktree_assignments = {}
-                    else:
-                        async for message in query(prompt=f"Formalize {source} into {project_path}.", options=ClaudeAgentOptions(**_formalization_kwargs)):
-                            _log_agent_message(message)
+                    _prompt_prefix = f"Formalize {source} into {project_path}."
+                    if worktree_assignments:
+                        _prompt_prefix += " Worktree assignments are in worktrees.json at the repository root."
+                    logging.info("[formalization T] invoking orchestrator query — agent will spawn per-chunk subagents, merge, and build")
+                    async for message in query(prompt=_prompt_prefix, options=ClaudeAgentOptions(**_formalization_kwargs)):
+                        _log_agent_message(message)
+                    logging.info("[formalization T] orchestrator query returned — running post-run audit")
+
+                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+
+                    logging.info(f"[formalization T] cleaning up {len(worktree_assignments)} worktree(s)")
+                    for cid, wt in worktree_assignments.items():
+                        _cleanup_worktree(Path(wt), project_path, cid)
+                    worktree_assignments = {}
+                    _delete_worktrees_manifest()
 
                     logging.info("Formalization phase completed successfully!")
                     _commit_phase("formalization", {"iteration": iteration})
                     break
                 except Exception as e:
                     for cid, wt in list(worktree_assignments.items()):
-                        _cleanup_worktree(Path(wt), project_path, cid)
+                        try:
+                            _cleanup_worktree(Path(wt), project_path, cid)
+                        except Exception as cleanup_err:
+                            logging.warning(f"Cleanup failed for {cid} during error recovery: {cleanup_err}")
                     worktree_assignments = {}
+                    _delete_worktrees_manifest()
                     await _invoke_resolver("formalization", e)
         else:
             logging.critical("CRITICAL (formalization phase): reached unreachable code")
@@ -1961,6 +2173,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         _console.rule("[bold blue]Critic Phase[/bold blue]")
 
+
+        _assert_lsp_alive("critic")
         if not context and iteration == 0:
             while True:
                 try:
@@ -2066,6 +2280,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         # Retrospective phase (inside loop — updates .unity/ before next iteration)
 
         _console.rule("[bold blue]Retrospective Phase[/bold blue]")
+
+        _assert_lsp_alive("retrospective")
         try:
             with open(PROMPTS_DIR / "RETROSPECTIVE.md", "r") as f:
                 RETROSPECTIVE_PROMPT = with_library(f.read().format(
