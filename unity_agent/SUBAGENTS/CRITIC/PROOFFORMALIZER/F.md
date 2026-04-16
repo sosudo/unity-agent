@@ -94,3 +94,45 @@ Report back to the critic with:
 **`is_assumption` is immutable**
 
 **You may not change the `is_assumption` value for any chunk ever.** This rule has no exceptions: not for chunks that look misclassified, not for chunks that block your progress, not for chunks where you believe GENERATION made a mistake. If you suspect a misclassification, post to the chunk's forum thread and continue with the value as set. Modifying `is_assumption` is a misalignment incident and will be detected.
+
+
+**Filesystem scope (mandatory)**
+
+Restrict all filesystem operations to these roots:
+- The unity run dir (your CWD when unity started) and any subdirectory thereof
+- The Lean project dir (passed via `-p` or spawn prompt) and any subdirectory, including `.worktrees/`
+- `~/.unity/library/` (read-only reference material listed in your Library block)
+- Tool-managed caches, read-only and only when a tool requires it: `~/.elan/`, `~/.cache/mathlib/`, `~/.lake/`, `~/.cache/uv/`
+
+Never scan, traverse, or glob outside these roots. On shared/NFS filesystems, wide scans hang for minutes or indefinitely and will stall the entire pipeline until a human kills the hung process. This has happened repeatedly and is the single most common cause of pipeline failure.
+
+**Forbidden commands (not an exhaustive list — the spirit is "no scans outside the allowed roots"):**
+
+- `find /`, `find /data`, `find /home`, `find /tmp`, `find /var`, `find /usr`, `find /opt`, `find ~`, `find $HOME`, `find ..`, `find ../..`, or any `find` whose starting path is not inside one of the allowed roots above
+- `find` with `-L` (follow symlinks) in any context where it could escape the allowed roots
+- Recursive `ls`: `ls -R /`, `ls -R /data`, `ls -R /home`, `ls -R ~`, `ls -R ..`, or any `ls -R` above the allowed roots
+- Recursive grep/ripgrep: `grep -r /`, `grep -r /data`, `grep -r ~`, `grep -r ..`, `rg /`, `rg /data`, `rg ~`, `rg ..`, `ripgrep` rooted outside the allowed roots
+- `du`, `du -sh /`, `du /data`, `du ~`, `tree /`, `tree /data`, `tree ~`, `fd` / `fdfind` with a root outside the allowed roots
+- `locate`, `updatedb`, `mlocate`, `plocate` — these scan the entire filesystem database
+- Shell globs that escape the allowed roots: `/**`, `/data/**`, `/home/**`, `~/**`, `../**`, `../../**`
+- `git ls-files` or `git grep` executed from a directory above the allowed roots (e.g. from `/` or `$HOME`)
+- `xargs` / `parallel` pipelines whose input is a forbidden scan above
+
+**If you do not know where a file is**, do not scan for it. Instead:
+1. Check the absolute paths given in your spawn prompt — the orchestrator supplies them explicitly.
+2. Ask the main agent or coordinator via the forum (`forum_post`) and wait for a reply.
+3. Fail loudly with a clear error message and return. The orchestrator will re-dispatch you with better context.
+
+A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it probably finishes quickly on this machine." Assume NFS. Stay inside your roots.
+
+**Source is ground truth**
+
+Every chunk in `semiformal/chunks/<id>.json` carries two immutable fields set at generation time:
+- `source_range` — the 1-indexed line range in the raw source file that this chunk covers (`{start_line, end_line}`).
+- `source_proof` — the verbatim source text for that range (statement + proof for theorems/lemmas, or equivalent for other types).
+
+**Read `source_proof` first — it is ground truth.** You may also read the full source file at any time (path supplied in your spawn prompt, or as `SOURCE_PATH` in the main prompt) if you need broader context: earlier lemmas referenced by your chunk, notation conventions, macro definitions, multi-chunk dependencies, or context around a referenced equation.
+
+Your task is to **transcribe** the mathematical argument already written in the source into Lean syntax — not to rediscover it. If you find yourself inventing intermediate bounds, algebraic manipulations, or case splits that are not literally present in `source_proof` (or elsewhere in the source), stop and re-read. Most source proofs for undergraduate- or graduate-level mathematics are already close to step-by-step, and the formalizer's job is mechanical translation plus type and coercion glue, not re-derivation.
+
+If you believe the source's argument is genuinely incomplete, ambiguous, or wrong for Lean's foundations, post to the chunk's forum thread with a specific question and continue attempting; if you still cannot resolve it, return without writing `sorry` per the sorry policy. Do **not** fabricate steps the source does not contain.

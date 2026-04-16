@@ -83,3 +83,42 @@ Proceed as instructed.
 **`is_assumption` schema check**
 
 For every chunk in `language/chunks/`, verify that `is_assumption` is present and is a boolean. If any chunk is missing the field or has a non-boolean value, the IR validation fails — record this in `VALIDATION_REPORT.md` so generation can re-emit the chunks with the field set.
+
+
+**Filesystem scope (mandatory)**
+
+Restrict all filesystem operations to these roots:
+- The unity run dir (your CWD when unity started) and any subdirectory thereof
+- The Lean project dir (passed via `-p` or spawn prompt) and any subdirectory, including `.worktrees/`
+- `~/.unity/library/` (read-only reference material listed in your Library block)
+- Tool-managed caches, read-only and only when a tool requires it: `~/.elan/`, `~/.cache/mathlib/`, `~/.lake/`, `~/.cache/uv/`
+
+Never scan, traverse, or glob outside these roots. On shared/NFS filesystems, wide scans hang for minutes or indefinitely and will stall the entire pipeline until a human kills the hung process. This has happened repeatedly and is the single most common cause of pipeline failure.
+
+**Forbidden commands (not an exhaustive list — the spirit is "no scans outside the allowed roots"):**
+
+- `find /`, `find /data`, `find /home`, `find /tmp`, `find /var`, `find /usr`, `find /opt`, `find ~`, `find $HOME`, `find ..`, `find ../..`, or any `find` whose starting path is not inside one of the allowed roots above
+- `find` with `-L` (follow symlinks) in any context where it could escape the allowed roots
+- Recursive `ls`: `ls -R /`, `ls -R /data`, `ls -R /home`, `ls -R ~`, `ls -R ..`, or any `ls -R` above the allowed roots
+- Recursive grep/ripgrep: `grep -r /`, `grep -r /data`, `grep -r ~`, `grep -r ..`, `rg /`, `rg /data`, `rg ~`, `rg ..`, `ripgrep` rooted outside the allowed roots
+- `du`, `du -sh /`, `du /data`, `du ~`, `tree /`, `tree /data`, `tree ~`, `fd` / `fdfind` with a root outside the allowed roots
+- `locate`, `updatedb`, `mlocate`, `plocate` — these scan the entire filesystem database
+- Shell globs that escape the allowed roots: `/**`, `/data/**`, `/home/**`, `~/**`, `../**`, `../../**`
+- `git ls-files` or `git grep` executed from a directory above the allowed roots (e.g. from `/` or `$HOME`)
+- `xargs` / `parallel` pipelines whose input is a forbidden scan above
+
+**If you do not know where a file is**, do not scan for it. Instead:
+1. Check the absolute paths given in your spawn prompt — the orchestrator supplies them explicitly.
+2. Ask the main agent or coordinator via the forum (`forum_post`) and wait for a reply.
+3. Fail loudly with a clear error message and return. The orchestrator will re-dispatch you with better context.
+
+A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it probably finishes quickly on this machine." Assume NFS. Stay inside your roots.
+
+**`source_range` and `source_proof` schema check**
+
+For every chunk in `language/chunks/`, verify:
+- `source_range` is present and is an object with integer `start_line` and `end_line` fields, with `start_line >= 1`, `end_line >= start_line`, and `end_line` not exceeding the last line of the raw source file.
+- `source_proof` is present and is a string (possibly empty).
+- The content of `source_proof` matches the raw source file exactly between `start_line` and `end_line` inclusive (trailing-newline differences are tolerated; any other divergence is a mismatch).
+
+Any missing field, wrong type, out-of-range line number, or content mismatch is a validation failure. Record it in `VALIDATION_REPORT.md` so generation can re-emit the chunks.

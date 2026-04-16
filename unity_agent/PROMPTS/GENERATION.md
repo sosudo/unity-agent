@@ -89,7 +89,10 @@ Schema:
   },
   "status": "pending",
   "lean_declaration": {"file": null, "line": null},
-  "mathlib_refs": []
+  "mathlib_refs": [],
+  "is_assumption": false,
+  "source_range": {"start_line": 1, "end_line": 1},
+  "source_proof": ""
 }
 ```
 
@@ -174,3 +177,45 @@ Every chunk written to `language/chunks/<id>.json` must include a boolean `is_as
 - `is_assumption: false` — the chunk is a statement, definition, theorem, or proof that the source itself states or proves. The formalization must include a full proof; a `sorry` here is a phase failure.
 
 **You may not change the `is_assumption` value for any chunk ever.** This rule has no exceptions: not for chunks that look misclassified, not for chunks that block your progress, not for chunks where you believe GENERATION made a mistake. If you suspect a misclassification, post to the chunk's forum thread and continue with the value as set. Modifying `is_assumption` is a misalignment incident and will be detected.
+
+
+**Filesystem scope (mandatory)**
+
+Restrict all filesystem operations to these roots:
+- The unity run dir (your CWD when unity started) and any subdirectory thereof
+- The Lean project dir (passed via `-p` or spawn prompt) and any subdirectory, including `.worktrees/`
+- `~/.unity/library/` (read-only reference material listed in your Library block)
+- Tool-managed caches, read-only and only when a tool requires it: `~/.elan/`, `~/.cache/mathlib/`, `~/.lake/`, `~/.cache/uv/`
+
+Never scan, traverse, or glob outside these roots. On shared/NFS filesystems, wide scans hang for minutes or indefinitely and will stall the entire pipeline until a human kills the hung process. This has happened repeatedly and is the single most common cause of pipeline failure.
+
+**Forbidden commands (not an exhaustive list — the spirit is "no scans outside the allowed roots"):**
+
+- `find /`, `find /data`, `find /home`, `find /tmp`, `find /var`, `find /usr`, `find /opt`, `find ~`, `find $HOME`, `find ..`, `find ../..`, or any `find` whose starting path is not inside one of the allowed roots above
+- `find` with `-L` (follow symlinks) in any context where it could escape the allowed roots
+- Recursive `ls`: `ls -R /`, `ls -R /data`, `ls -R /home`, `ls -R ~`, `ls -R ..`, or any `ls -R` above the allowed roots
+- Recursive grep/ripgrep: `grep -r /`, `grep -r /data`, `grep -r ~`, `grep -r ..`, `rg /`, `rg /data`, `rg ~`, `rg ..`, `ripgrep` rooted outside the allowed roots
+- `du`, `du -sh /`, `du /data`, `du ~`, `tree /`, `tree /data`, `tree ~`, `fd` / `fdfind` with a root outside the allowed roots
+- `locate`, `updatedb`, `mlocate`, `plocate` — these scan the entire filesystem database
+- Shell globs that escape the allowed roots: `/**`, `/data/**`, `/home/**`, `~/**`, `../**`, `../../**`
+- `git ls-files` or `git grep` executed from a directory above the allowed roots (e.g. from `/` or `$HOME`)
+- `xargs` / `parallel` pipelines whose input is a forbidden scan above
+
+**If you do not know where a file is**, do not scan for it. Instead:
+1. Check the absolute paths given in your spawn prompt — the orchestrator supplies them explicitly.
+2. Ask the main agent or coordinator via the forum (`forum_post`) and wait for a reply.
+3. Fail loudly with a clear error message and return. The orchestrator will re-dispatch you with better context.
+
+A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it probably finishes quickly on this machine." Assume NFS. Stay inside your roots.
+
+**`source_range` and `source_proof` fields (mandatory, immutable)**
+
+Every chunk written to `language/chunks/<id>.json` must include two additional fields:
+
+- `source_range: { "start_line": int, "end_line": int }` — 1-indexed line numbers into the raw source file (line 1 is the first line of the file exactly as supplied, including any preamble), inclusive on both ends. For theorems and lemmas, the range covers the full declaration block including both statement and proof (e.g. the entire `\begin{lem}...\end{lem}\begin{proof}...\end{proof}` span, or the equivalent in whatever format the source uses). For definitions, the range covers the full definition block. For other chunk types, the range covers all source text a downstream formalizer needs to read for this chunk.
+
+- `source_proof: string` — the **verbatim** text of the source between `start_line` and `end_line`, inclusive, copied exactly. Preserve delimiters (`\begin{proof}`, `\end{proof}`, etc.), math, macros, and whitespace. Do not paraphrase, summarize, or "clean up." This field is ground truth for the formalization phase.
+
+If the chunk is an assumption-type (`is_assumption: true`) whose source truly contains no proof text (e.g. a pure blackbox citation), set `source_proof` to the exact cited text if any, or `""` if literally none exists — but always set `source_range` to the line range of the citation.
+
+**You may not change `source_range` or `source_proof` for any chunk once written.** These fields are immutable from generation onward, same rule as `is_assumption`. Downstream phases read them but must never rewrite them. A mismatch between `source_proof` and the verbatim content of `source_range` in the raw source file is a misalignment incident and will be detected.

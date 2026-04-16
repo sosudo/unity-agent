@@ -86,3 +86,33 @@ Report back to the main agent with:
 - A brief assessment of how well the gathered sources cover the assumption
 
 **IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
+
+
+**Filesystem scope (mandatory)**
+
+Restrict all filesystem operations to these roots:
+- The unity run dir (your CWD when unity started) and any subdirectory thereof
+- The Lean project dir (passed via `-p` or spawn prompt) and any subdirectory, including `.worktrees/`
+- `~/.unity/library/` (read-only reference material listed in your Library block)
+- Tool-managed caches, read-only and only when a tool requires it: `~/.elan/`, `~/.cache/mathlib/`, `~/.lake/`, `~/.cache/uv/`
+
+Never scan, traverse, or glob outside these roots. On shared/NFS filesystems, wide scans hang for minutes or indefinitely and will stall the entire pipeline until a human kills the hung process. This has happened repeatedly and is the single most common cause of pipeline failure.
+
+**Forbidden commands (not an exhaustive list — the spirit is "no scans outside the allowed roots"):**
+
+- `find /`, `find /data`, `find /home`, `find /tmp`, `find /var`, `find /usr`, `find /opt`, `find ~`, `find $HOME`, `find ..`, `find ../..`, or any `find` whose starting path is not inside one of the allowed roots above
+- `find` with `-L` (follow symlinks) in any context where it could escape the allowed roots
+- Recursive `ls`: `ls -R /`, `ls -R /data`, `ls -R /home`, `ls -R ~`, `ls -R ..`, or any `ls -R` above the allowed roots
+- Recursive grep/ripgrep: `grep -r /`, `grep -r /data`, `grep -r ~`, `grep -r ..`, `rg /`, `rg /data`, `rg ~`, `rg ..`, `ripgrep` rooted outside the allowed roots
+- `du`, `du -sh /`, `du /data`, `du ~`, `tree /`, `tree /data`, `tree ~`, `fd` / `fdfind` with a root outside the allowed roots
+- `locate`, `updatedb`, `mlocate`, `plocate` — these scan the entire filesystem database
+- Shell globs that escape the allowed roots: `/**`, `/data/**`, `/home/**`, `~/**`, `../**`, `../../**`
+- `git ls-files` or `git grep` executed from a directory above the allowed roots (e.g. from `/` or `$HOME`)
+- `xargs` / `parallel` pipelines whose input is a forbidden scan above
+
+**If you do not know where a file is**, do not scan for it. Instead:
+1. Check the absolute paths given in your spawn prompt — the orchestrator supplies them explicitly.
+2. Ask the main agent or coordinator via the forum (`forum_post`) and wait for a reply.
+3. Fail loudly with a clear error message and return. The orchestrator will re-dispatch you with better context.
+
+A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it probably finishes quickly on this machine." Assume NFS. Stay inside your roots.

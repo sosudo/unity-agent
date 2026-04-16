@@ -448,6 +448,189 @@ def _cleanup_worktree(worktree_path: Path, project_path: Path, chunk_id: str) ->
         logging.info(f"Branch {branch} already gone — skipping delete.")
 
 
+_TOP_LEVEL_DECL = re.compile(
+    r"^\s*(?:@\[[^\]]*\]\s*)?"
+    r"(?:noncomputable\s+|private\s+|protected\s+)*"
+    r"(theorem|lemma|def|example|instance|structure|inductive|class|abbrev|opaque|axiom)\b"
+)
+
+
+def _strip_lean_comments(src: str) -> str:
+    src = re.sub(r"/-.*?-/", "", src, flags=re.DOTALL)
+    src = re.sub(r"--[^\n]*", "", src)
+    return src
+
+
+def _audit_illegitimate_sorries(run_dir: Path, project_path: Path) -> list[dict]:
+    """Scan non-assumption chunks for sorry in their Lean declaration body.
+
+    Returns a list of violation records and writes ILLEGITIMATE_SORRIES.md.
+    An illegitimate sorry is any `\\bsorry\\b` (post-comment-strip) in the body
+    of a chunk whose is_assumption is False. The body runs from the chunk's
+    lean_declaration.line up to the next top-level declaration start.
+    """
+    violations: list[dict] = []
+    chunk_dirs = [run_dir / "semiformal" / "chunks", run_dir / "language" / "chunks"]
+    chunk_files: dict[str, Path] = {}
+    for cd in chunk_dirs:
+        if cd.is_dir():
+            for p in sorted(cd.glob("*.json")):
+                chunk_files.setdefault(p.stem, p)
+
+    by_file: dict[Path, list[dict]] = {}
+    for chunk_id, chunk_path in chunk_files.items():
+        try:
+            chunk = json.loads(chunk_path.read_text())
+        except Exception as e:
+            logging.warning(f"audit: failed to read {chunk_path}: {e}")
+            continue
+        if chunk.get("is_assumption"):
+            continue
+        decl = chunk.get("lean_declaration") or {}
+        file_rel = decl.get("file")
+        line = decl.get("line")
+        if not file_rel or not isinstance(line, int):
+            continue
+        lean_file = (project_path / file_rel).resolve()
+        by_file.setdefault(lean_file, []).append({"id": chunk_id, "line": line})
+
+    for lean_file, entries in by_file.items():
+        try:
+            text = lean_file.read_text()
+        except Exception as e:
+            logging.warning(f"audit: cannot read {lean_file}: {e}")
+            continue
+        lines = text.splitlines()
+        decl_starts = sorted({
+            i + 1 for i, ln in enumerate(lines) if _TOP_LEVEL_DECL.match(ln)
+        })
+        entries.sort(key=lambda e: e["line"])
+        for entry in entries:
+            start = entry["line"]
+            end = len(lines)
+            for s in decl_starts:
+                if s > start:
+                    end = s - 1
+                    break
+            if start < 1 or start > len(lines):
+                continue
+            body = "\n".join(lines[start - 1:end])
+            stripped = _strip_lean_comments(body)
+            if re.search(r"\bsorry\b", stripped):
+                violations.append({
+                    "chunk_id": entry["id"],
+                    "file": str(lean_file.relative_to(project_path)) if lean_file.is_relative_to(project_path) else str(lean_file),
+                    "line": start,
+                })
+
+    for v in violations:
+        logging.error(f"ILLEGITIMATE sorry in non-assumption chunk {v['chunk_id']} at {v['file']}:{v['line']}")
+
+    report_path = run_dir / "ILLEGITIMATE_SORRIES.md"
+    if violations:
+        lines_out = ["# Illegitimate Sorries", "", f"Found {len(violations)} non-assumption chunk(s) with `sorry` in body.", ""]
+        for v in violations:
+            lines_out.append(f"- `{v['chunk_id']}` — {v['file']}:{v['line']}")
+        report_path.write_text("\n".join(lines_out) + "\n")
+    else:
+        report_path.write_text("# Illegitimate Sorries\n\nNone detected.\n")
+
+    return violations
+
+
+def _collect_chunk_sorry_set(run_dir: Path, project_path: Path) -> frozenset[str]:
+    """Return the set of chunk IDs currently carrying a sorry (any chunk, assumption or not)."""
+    out: set[str] = set()
+    chunk_dirs = [run_dir / "semiformal" / "chunks", run_dir / "language" / "chunks"]
+    seen: dict[str, Path] = {}
+    for cd in chunk_dirs:
+        if cd.is_dir():
+            for p in sorted(cd.glob("*.json")):
+                seen.setdefault(p.stem, p)
+    by_file: dict[Path, list[dict]] = {}
+    for chunk_id, chunk_path in seen.items():
+        try:
+            chunk = json.loads(chunk_path.read_text())
+        except Exception:
+            continue
+        decl = chunk.get("lean_declaration") or {}
+        file_rel = decl.get("file")
+        line = decl.get("line")
+        if not file_rel or not isinstance(line, int):
+            continue
+        by_file.setdefault((project_path / file_rel).resolve(), []).append({"id": chunk_id, "line": line})
+    for lean_file, entries in by_file.items():
+        try:
+            text = lean_file.read_text()
+        except Exception:
+            continue
+        lines = text.splitlines()
+        decl_starts = sorted({i + 1 for i, ln in enumerate(lines) if _TOP_LEVEL_DECL.match(ln)})
+        entries.sort(key=lambda e: e["line"])
+        for entry in entries:
+            start = entry["line"]
+            end = len(lines)
+            for s in decl_starts:
+                if s > start:
+                    end = s - 1
+                    break
+            if start < 1 or start > len(lines):
+                continue
+            body = "\n".join(lines[start - 1:end])
+            stripped = _strip_lean_comments(body)
+            if re.search(r"\bsorry\b", stripped):
+                out.add(entry["id"])
+    return frozenset(out)
+
+
+def _assert_semiformal_field_propagation(run_dir: Path) -> list[dict]:
+    """Verify each semiformal chunk carries is_assumption/source_range/source_proof matching its language chunk.
+
+    Writes SEMIFORMAL_FIELD_DRIFT.md and logs one error per drift. Non-halting:
+    drift is surfaced so the next iteration can correct it.
+    """
+    language_dir = run_dir / "language" / "chunks"
+    semiformal_dir = run_dir / "semiformal" / "chunks"
+    if not language_dir.is_dir() or not semiformal_dir.is_dir():
+        return []
+
+    drifts: list[dict] = []
+    for semi_path in sorted(semiformal_dir.glob("*.json")):
+        chunk_id = semi_path.stem
+        lang_path = language_dir / semi_path.name
+        if not lang_path.exists():
+            drifts.append({"chunk_id": chunk_id, "field": "(missing language chunk)", "language": None, "semiformal": None})
+            continue
+        try:
+            lang = json.loads(lang_path.read_text())
+            semi = json.loads(semi_path.read_text())
+        except Exception as e:
+            drifts.append({"chunk_id": chunk_id, "field": f"(parse error: {e})", "language": None, "semiformal": None})
+            continue
+        for field in ("is_assumption", "source_range", "source_proof"):
+            lv, sv = lang.get(field), semi.get(field)
+            if lv != sv:
+                drifts.append({"chunk_id": chunk_id, "field": field, "language": lv, "semiformal": sv})
+
+    for d in drifts:
+        logging.error(
+            f"SEMIFORMAL FIELD DRIFT in chunk {d['chunk_id']} "
+            f"field={d['field']}: language={d['language']!r} semiformal={d['semiformal']!r}"
+        )
+
+    report_path = run_dir / "SEMIFORMAL_FIELD_DRIFT.md"
+    if drifts:
+        lines_out = ["# Semiformal Field Drift", "",
+                     f"Found {len(drifts)} drift(s) — `is_assumption`/`source_range`/`source_proof` must be copied verbatim from `language/chunks/<id>.json`.", ""]
+        for d in drifts:
+            lines_out.append(f"- `{d['chunk_id']}` field `{d['field']}`: language=`{d['language']}` semiformal=`{d['semiformal']}`")
+        report_path.write_text("\n".join(lines_out) + "\n")
+    else:
+        report_path.write_text("# Semiformal Field Drift\n\nNone detected.\n")
+
+    return drifts
+
+
 async def _warm_lean_lsp(project_path: Path) -> None:
     """Pre-warm the Lean LSP by opening a trivial file, loading OLEANs into the OS page cache."""
     def _do_warmup():
@@ -602,7 +785,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         autofix = parse_bool(os.getenv("AUTOFIX"))
         exploration = parse_bool(os.getenv("EXPLORATION"))
         recurse = parse_bool(os.getenv("RECURSE"))
-        max_critic_iterations = parse_int(os.getenv("MAX_CRITIC_ITERATIONS"))
+        max_critic_iterations = parse_int(os.getenv("MAX_CRITIC_ITERATIONS")) or 3
         max_validation_iterations = parse_int(os.getenv("MAX_VALIDATION_ITERATIONS"))
         forum_port = parse_int(os.getenv("FORUM_PORT")) or 8080
         lean_lsp_port = parse_int(os.getenv("LEAN_LSP_PORT")) or 6368
@@ -1226,12 +1409,17 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     _log_agent_message(message)
 
                 logging.info("Semiformalization phase completed successfully!")
+                try:
+                    _assert_semiformal_field_propagation(Path.cwd())
+                except Exception as _drift_err:
+                    logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
                 break
             except Exception as e:
                 await _invoke_resolver("semiformalization", e)
 
         iteration = 0
+        previous_sorry_chunks: frozenset[str] | None = None
         while True:
 
             # Formalization phase (always T variant: existing project always present)
@@ -1326,43 +1514,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     _delete_worktrees_manifest()
                     await _invoke_resolver("formalization", e)
 
-            # Retrospective phase
-            _console.rule("[bold blue]Retrospective Phase[/bold blue]")
-            _assert_lsp_alive("retrospective")
-            try:
-                with open(PROMPTS_DIR / "RETROSPECTIVE.md", "r") as f:
-                    RETROSPECTIVE_PROMPT = with_library(f.read().format(
-                        SOURCE_PATH="(no source — proof completion mode)",
-                        LIBRARY_DIR=str(_get_library_dir()),
-                        PROJECT_NOTES_DIR=str(_get_project_notes_dir()),
-                        SUBAGENTS_DIR=str(_SUBAGENTS_DIR),
-                        DEFAULT_SUBAGENTS_DIR=str(_DEFAULT_SUBAGENTS_DIR),
-                    ))
-                async for message in query(
-                    prompt=f"Run the retrospective for the unity proof formalization of {project_path}.",
-                    options=ClaudeAgentOptions(
-                        tools=_ALL_TOOLS,
-                        allowed_tools=_ALL_TOOLS,
-                        agents={**LIBRARY_SUBAGENTS},
-                        system_prompt=RETROSPECTIVE_PROMPT,
-                        mcp_servers=LEAN_MCP_SERVER,
-                        hooks=FORUM_HOOKS,
-                        permission_mode=PERMISSIONS,
-
-                        enable_file_checkpointing=True,
-                        model="opus",
-                        fallback_model="sonnet",
-                        env=_agent_env,
-
-                    ),
-                ):
-                    _log_agent_message(message)
-                logging.info("Retrospective phase completed successfully!")
-            except Exception as e:
-                logging.error(f"ERROR (retrospective phase): {e}")
-
-            library_context = _load_library_context()
-
             # Critic phase (always T variant)
             _console.rule("[bold blue]Critic Phase[/bold blue]")
             _assert_lsp_alive("critic")
@@ -1413,6 +1564,55 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as e:
                     await _invoke_resolver("critic", e)
 
+            # Retrospective phase (after critic — integrates critic feedback into library)
+            _console.rule("[bold blue]Retrospective Phase[/bold blue]")
+            _assert_lsp_alive("retrospective")
+            try:
+                with open(PROMPTS_DIR / "RETROSPECTIVE.md", "r") as f:
+                    RETROSPECTIVE_PROMPT = with_library(f.read().format(
+                        SOURCE_PATH="(no source — proof completion mode)",
+                        LIBRARY_DIR=str(_get_library_dir()),
+                        PROJECT_NOTES_DIR=str(_get_project_notes_dir()),
+                        SUBAGENTS_DIR=str(_SUBAGENTS_DIR),
+                        DEFAULT_SUBAGENTS_DIR=str(_DEFAULT_SUBAGENTS_DIR),
+                    ))
+                async for message in query(
+                    prompt=f"Run the retrospective for the unity proof formalization of {project_path}.",
+                    options=ClaudeAgentOptions(
+                        tools=_ALL_TOOLS,
+                        allowed_tools=_ALL_TOOLS,
+                        agents={**LIBRARY_SUBAGENTS},
+                        system_prompt=RETROSPECTIVE_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        hooks=FORUM_HOOKS,
+                        permission_mode=PERMISSIONS,
+
+                        enable_file_checkpointing=True,
+                        model="opus",
+                        fallback_model="sonnet",
+                        env=_agent_env,
+
+                    ),
+                ):
+                    _log_agent_message(message)
+                logging.info("Retrospective phase completed successfully!")
+            except Exception as e:
+                logging.error(f"ERROR (retrospective phase): {e}")
+
+            library_context = _load_library_context()
+
+            # Stagnation check: compare sorry-carrying chunks across iterations
+            try:
+                current_sorry_chunks = _collect_chunk_sorry_set(Path.cwd(), project_path)
+                if previous_sorry_chunks is not None and current_sorry_chunks and current_sorry_chunks == previous_sorry_chunks:
+                    logging.warning(
+                        f"Critic iteration {iteration}: sorry set unchanged from previous iteration "
+                        f"({len(current_sorry_chunks)} chunk(s)): {sorted(current_sorry_chunks)}"
+                    )
+                previous_sorry_chunks = current_sorry_chunks
+            except Exception as e:
+                logging.warning(f"stagnation check failed: {e}")
+
             # Loop status check
             try:
                 report_text = _read_report_md()
@@ -1428,6 +1628,11 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             except FileNotFoundError:
                 logging.warning("No REPORT.md found after critic phase — stopping loop.")
                 break
+
+        try:
+            _audit_illegitimate_sorries(Path.cwd(), project_path)
+        except Exception as e:
+            logging.error(f"ERROR (illegitimate-sorry audit): {e}")
 
         _console.rule("[bold blue]Summary[/bold blue]")
         try:
@@ -1661,6 +1866,10 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     _log_agent_message(message)
 
                 logging.info("Semiformalization phase completed successfully!")
+                try:
+                    _assert_semiformal_field_propagation(Path.cwd())
+                except Exception as _drift_err:
+                    logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
                 break
             except Exception as e:
@@ -1703,6 +1912,10 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     _log_agent_message(message)
 
                 logging.info("Semiformalization phase completed successfully!")
+                try:
+                    _assert_semiformal_field_propagation(Path.cwd())
+                except Exception as _drift_err:
+                    logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
                 break
             except Exception as e:
@@ -1745,6 +1958,10 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     _log_agent_message(message)
 
                 logging.info("Semiformalization phase completed successfully!")
+                try:
+                    _assert_semiformal_field_propagation(Path.cwd())
+                except Exception as _drift_err:
+                    logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
                 break
             except Exception as e:
@@ -1754,6 +1971,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         exit(1)
 
     iteration = 0
+    previous_sorry_chunks: frozenset[str] | None = None
     while True:
 
         # Exploration phase
@@ -2334,6 +2552,18 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         # Reload library context so next iteration picks up .unity/ additions
         library_context = _load_library_context()
 
+        # Stagnation check: compare sorry-carrying chunks across iterations
+        try:
+            current_sorry_chunks = _collect_chunk_sorry_set(Path.cwd(), project_path)
+            if previous_sorry_chunks is not None and current_sorry_chunks and current_sorry_chunks == previous_sorry_chunks:
+                logging.warning(
+                    f"Critic iteration {iteration}: sorry set unchanged from previous iteration "
+                    f"({len(current_sorry_chunks)} chunk(s)): {sorted(current_sorry_chunks)}"
+                )
+            previous_sorry_chunks = current_sorry_chunks
+        except Exception as e:
+            logging.warning(f"stagnation check failed: {e}")
+
         # Critic loop status check
         try:
             report_text = _read_report_md()
@@ -2349,6 +2579,11 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         except FileNotFoundError:
             logging.warning("No REPORT.md found after critic phase — stopping loop.")
             break
+
+    try:
+        _audit_illegitimate_sorries(Path.cwd(), project_path)
+    except Exception as e:
+        logging.error(f"ERROR (illegitimate-sorry audit): {e}")
 
     # Cleanup
 
