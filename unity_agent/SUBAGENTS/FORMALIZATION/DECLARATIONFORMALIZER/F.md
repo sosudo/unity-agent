@@ -45,6 +45,11 @@ The orchestrator that spawned you has assigned you an isolated git worktree for 
 - All reads, writes, and builds must happen in your current working directory
 - Before signaling completion, you MUST commit all your changes: `git add -A && git commit -m "FORMALIZATION: chunk <chunk_id>"`. If you return without committing, your worktree has nothing to merge and the orchestrator will re-spawn you — so committing is mandatory, not optional.
 
+**Shared-state edits must be announced on the forum.** Your chunk has a declaration/proof region that is yours to own — edit it freely. But any edit that touches code outside your chunk's region — adding or modifying `import` statements, `open` declarations, `namespace` scope, notation, or existing helper lemmas shared with layer-mates — must be posted to `formalization-layer-<N>-decl` (or `-proof`) describing the change and why, before or alongside making the edit. Proceed with the edit once you've posted; do not block waiting. Check the thread again before your next edit and reconcile with any conflicting proposals by reply or revision. Layer-mates working in parallel will often independently need the same import or `open` — posting lets everyone converge on an identical edit (which git will auto-merge) rather than diverging (which causes merge conflicts).
+
+**Poll the forum regularly.** At minimum: read the layer coordination thread and your chunk's thread (a) at start, (b) before each shared-state edit, (c) after each `lake build`, and (d) before returning. Forum activity from layer-mates is the primary signal that a shared-state decision is in flight — missing it is how merge conflicts get created.
+
+
 **Output**
 
 Report back to the main agent with:

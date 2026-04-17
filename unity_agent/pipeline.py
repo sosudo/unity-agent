@@ -424,14 +424,27 @@ def _audit_worktree_commits(worktree_assignments: dict[str, str], project_path: 
                 f"merge commit on main — subagent likely returned without doing work."
             )
         elif committed and not merged:
-            logging.warning(
+            logging.error(
                 f"[audit] chunk {chunk_id}: branch '{branch}' has commits but orchestrator did not "
-                f"squash-merge them into main — merge step was skipped."
+                f"squash-merge them into main — merge step was skipped. This is a correctness "
+                f"regression: subagent work is stranded on the worktree branch."
             )
         else:
             logging.info(
                 f"[audit] chunk {chunk_id}: ok (committed={committed}, merged={merged}, dirty={dirty})"
             )
+
+    skipped = sorted(cid for cid, r in report.items() if r["committed"] and not r["merged"])
+    if skipped:
+        log_path = Path.cwd() / "MERGE_SKIPPED.md"
+        header = not log_path.exists()
+        with log_path.open("a") as f:
+            if header:
+                f.write("# Merge Skipped Log\n\nChunks whose worktree branches were left unmerged by the formalization orchestrator. This is a correctness regression — the retrospective phase should flag it, and the critic should treat stranded work as equivalent to missing work.\n")
+            f.write(f"\n## Orchestrator run ({len(skipped)} chunk(s))\n")
+            for cid in skipped:
+                safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", cid)
+                f.write(f"- `{cid}` (branch `worktree/{safe_id}`)\n")
     return report
 
 
@@ -1366,7 +1379,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         run_cost = 0.0
         t_start = time.monotonic()
         try:
-            with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
+            with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/ESCALATION.md", "r") as f:
                 FORMALIZATION_PROMPT = with_library(f.read())
             with open(_SUBAGENTS_DIR / "FORMALIZATION/DECLARATIONFORMALIZER/T.md", "r") as f:
                 DECLARATIONFORMALIZER_SUBAGENT = f.read()
@@ -1380,10 +1393,22 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             _write_worktrees_manifest(worktree_assignments)
             logging.info(f"[escalation] worktrees.json written with {len(worktree_assignments)} assignment(s)")
 
-            prefix = f"Escalation pass for {source_label}: " if source_label else "Escalation pass: "
+            unity_run_dir = Path.cwd()
+            source_line = f"SOURCE_PATH: {source_label}\n" if source_label else ""
             escalation_prompt = (
-                f"{prefix}resolve sorries in stagnant chunks {candidates} at {project_path}. "
-                f"Worktree assignments are in worktrees.json at the repository root."
+                f"Escalation pass (iteration {iteration}, tier {tier}).\n\n"
+                f"UNITY_RUN_DIR: {unity_run_dir}\n"
+                f"PROJECT_PATH: {project_path}\n"
+                f"{source_line}"
+                f"WORKTREES_MANIFEST: {unity_run_dir}/worktrees.json\n"
+                f"CANDIDATE_CHUNKS: {candidates}\n\n"
+                f"Resolve the sorries in each candidate chunk using the source material "
+                f"(read from SOURCE_PATH if provided) and the semiformal translation at "
+                f"{unity_run_dir}/semiformal/chunks/<id>.json. Each candidate has a pre-created "
+                f"worktree — read WORKTREES_MANIFEST for its worktree_path and branch, cd to "
+                f"the worktree, produce the proof, commit inside the worktree, then merge "
+                f"--squash into {_main_branch} from PROJECT_PATH with commit message "
+                f"'UNITY: merge chunk <id>' (audit greps for this exact prefix — do not vary it)."
             )
 
             async for message in query(

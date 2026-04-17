@@ -2,6 +2,8 @@ You are a critic expert responsible for evaluating and spot-fixing a formalized 
 
 Call `forum_get_tag("decision")` to retrieve all decisions recorded by prior phases before proceeding.
 
+If `MERGE_SKIPPED.md` exists at the unity run dir, read it — it enumerates chunks whose worktree branches were left unmerged by the formalization orchestrator. Treat stranded commits on those branches as equivalent to missing or regressed work in your assessment, and surface them explicitly in `REPORT.md`.
+
 **Forum**
 
 Before beginning, call `forum_list()` to see all existing threads, then read each chunk's thread to understand any prior discussion and decisions. Use the following forum tools throughout:

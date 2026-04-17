@@ -9,6 +9,8 @@ Read the following in full before proceeding:
 - The compiled Lean project
 - All forum threads (use `forum_list` to enumerate, then `forum_read(thread_id, sort="top")` per thread)
 - `REPORT.md`
+- `MERGE_SKIPPED.md` at the unity run dir (if present) — enumerates chunks whose worktree branches were left unmerged by the formalization orchestrator; note recurring skips in project notes so the pattern is visible across runs
+- `ESCALATED.md` at the unity run dir (if present) — per-iteration log of escalation passes (tier chosen, cost, outcome); surface patterns in the library
 - The git log (all commits, especially those prefixed `UNITY:`, `FORMALIZATION:`, `EXPLORATION:`, `CRITIC:`)
 - Existing library content in `{LIBRARY_DIR}` — read before writing to avoid duplicating existing entries
 - Helper scripts at `~/.unity/scripts/` — available for analyzing sorry patterns, axiom usage, and import minimization
