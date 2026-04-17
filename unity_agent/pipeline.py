@@ -2,10 +2,12 @@
 
 import asyncio
 import atexit
+import hashlib
 import os
 import re
 import shutil
 import sys
+import time
 import json
 import logging
 import subprocess
@@ -583,6 +585,158 @@ def _collect_chunk_sorry_set(run_dir: Path, project_path: Path) -> frozenset[str
     return frozenset(out)
 
 
+def _chunk_body_signatures(run_dir: Path, project_path: Path) -> dict[str, tuple[str, bool]]:
+    """Per-chunk (body_hash, has_sorry). Mirrors _collect_chunk_sorry_set's body-extraction logic."""
+    out: dict[str, tuple[str, bool]] = {}
+    chunk_dirs = [run_dir / "semiformal" / "chunks", run_dir / "language" / "chunks"]
+    seen: dict[str, Path] = {}
+    for cd in chunk_dirs:
+        if cd.is_dir():
+            for p in sorted(cd.glob("*.json")):
+                seen.setdefault(p.stem, p)
+    by_file: dict[Path, list[dict]] = {}
+    for chunk_id, chunk_path in seen.items():
+        try:
+            chunk = json.loads(chunk_path.read_text())
+        except Exception:
+            continue
+        decl = chunk.get("lean_declaration") or {}
+        file_rel = decl.get("file")
+        line = decl.get("line")
+        if not file_rel or not isinstance(line, int):
+            continue
+        by_file.setdefault((project_path / file_rel).resolve(), []).append({"id": chunk_id, "line": line})
+    for lean_file, entries in by_file.items():
+        try:
+            text = lean_file.read_text()
+        except Exception:
+            continue
+        lines = text.splitlines()
+        decl_starts = sorted({i + 1 for i, ln in enumerate(lines) if _TOP_LEVEL_DECL.match(ln)})
+        entries.sort(key=lambda e: e["line"])
+        for entry in entries:
+            start = entry["line"]
+            end = len(lines)
+            for s in decl_starts:
+                if s > start:
+                    end = s - 1
+                    break
+            if start < 1 or start > len(lines):
+                continue
+            body = "\n".join(lines[start - 1:end])
+            stripped = _strip_lean_comments(body)
+            has_sorry = bool(re.search(r"\bsorry\b", stripped))
+            h = hashlib.sha256(stripped.encode("utf-8", "replace")).hexdigest()[:16]
+            out[entry["id"]] = (h, has_sorry)
+    return out
+
+
+def _default_bandit_state() -> dict:
+    return {
+        "chunks": {},
+        "bandit": {
+            "A": {"alpha": 1.0, "beta": 1.0, "t_mean": 0.0, "n": 0},
+            "B": {"alpha": 1.0, "beta": 1.0, "t_mean": 0.0, "n": 0},
+        },
+        "secondary_spend": 0.0,
+    }
+
+
+def _load_bandit_state(path: Path) -> dict:
+    if path.exists():
+        try:
+            state = json.loads(path.read_text())
+            state.setdefault("chunks", {})
+            state.setdefault("bandit", _default_bandit_state()["bandit"])
+            state.setdefault("secondary_spend", 0.0)
+            return state
+        except Exception:
+            pass
+    return _default_bandit_state()
+
+
+def _save_bandit_state(path: Path, state: dict) -> None:
+    path.write_text(json.dumps(state, indent=2))
+
+
+def _update_stagnation(state: dict, current_sigs: dict[str, tuple[str, bool]]) -> None:
+    """Bump stagnation counter for chunks whose (body_hash, has_sorry) is unchanged *and* still has sorry."""
+    for cid, (h, s) in current_sigs.items():
+        entry = state["chunks"].setdefault(cid, {"prev_sig": None, "stagnation": 0, "last_escalation": None})
+        prev = entry.get("prev_sig")
+        if not s:
+            entry["stagnation"] = 0
+        elif prev is not None and prev[0] == h and prev[1] == s:
+            entry["stagnation"] = int(entry.get("stagnation", 0)) + 1
+        else:
+            entry["stagnation"] = 1
+        entry["prev_sig"] = [h, s]
+
+
+def _stagnant_chunks(state: dict, threshold: int = 2) -> list[str]:
+    return sorted(
+        cid for cid, e in state["chunks"].items()
+        if int(e.get("stagnation", 0)) >= threshold
+        and e.get("prev_sig") and e["prev_sig"][1]
+    )
+
+
+def _update_bandit_belief(state: dict, tier: str, success: bool, t_sec: float) -> None:
+    b = state["bandit"][tier]
+    if success:
+        b["alpha"] = float(b["alpha"]) + 1.0
+    else:
+        b["beta"] = float(b["beta"]) + 1.0
+    n = int(b.get("n", 0))
+    b["t_mean"] = (float(b.get("t_mean", 0.0)) * n + float(t_sec)) / (n + 1)
+    b["n"] = n + 1
+
+
+def _choose_tier(state: dict) -> str:
+    """Pick A (primary) or B (secondary). Cold-start defers to B; else min(t/E[p]) wins."""
+    A = state["bandit"]["A"]
+    B = state["bandit"]["B"]
+    if int(A.get("n", 0)) == 0 or int(B.get("n", 0)) == 0:
+        return "B"
+    ep_A = float(A["alpha"]) / (float(A["alpha"]) + float(A["beta"]))
+    ep_B = float(B["alpha"]) / (float(B["alpha"]) + float(B["beta"]))
+    if ep_A <= 0.0:
+        return "B"
+    if ep_B <= 0.0:
+        return "A"
+    score_A = float(A["t_mean"]) / ep_A
+    score_B = float(B["t_mean"]) / ep_B
+    return "A" if score_A <= score_B else "B"
+
+
+def _resolve_escalation_outcomes(state: dict, current_sigs: dict[str, tuple[str, bool]]) -> None:
+    """For each chunk with an unresolved prior escalation, credit/penalise its tier based on current sorry presence."""
+    for cid, entry in state["chunks"].items():
+        last = entry.get("last_escalation")
+        if not last or last.get("outcome_resolved"):
+            continue
+        sig = current_sigs.get(cid)
+        if sig is None:
+            continue
+        success = not sig[1]  # success := sorry is gone
+        _update_bandit_belief(state, last["tier"], success, float(last.get("t_sec", 0.0)))
+        last["outcome_resolved"] = True
+        last["success"] = success
+
+
+def _append_escalated_log(run_dir: Path, iteration: int, tier: str, chunks: list[str], cost: float, t_sec: float, secondary_spend_total: float) -> None:
+    log_path = run_dir / "ESCALATED.md"
+    header = not log_path.exists()
+    with log_path.open("a") as f:
+        if header:
+            f.write("# Escalation Log\n")
+        f.write(f"\n## Iteration {iteration} — tier {tier}\n")
+        f.write(f"- chunks: {', '.join(chunks)}\n")
+        f.write(f"- cost: ${cost:.4f}\n")
+        f.write(f"- wall_time: {t_sec:.1f}s\n")
+        f.write(f"- secondary_spend_total: ${secondary_spend_total:.4f}\n")
+
+
 def _assert_semiformal_field_propagation(run_dir: Path) -> list[dict]:
     """Verify each semiformal chunk carries is_assumption/source_range/source_proof matching its language chunk.
 
@@ -781,6 +935,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         preparation_budget = parse_float(os.getenv("PREPARATION_BUDGET"))
         formalization_budget = parse_float(os.getenv("FORMALIZATION_BUDGET"))
         critic_budget = parse_float(os.getenv("CRITIC_BUDGET"))
+        secondary_budget = parse_float(os.getenv("SECONDARY_BUDGET"))
         save_semiformalization = parse_bool(os.getenv("SAVE_SEMIFORMALIZATION"))
         autofix = parse_bool(os.getenv("AUTOFIX"))
         exploration = parse_bool(os.getenv("EXPLORATION"))
@@ -840,6 +995,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"PREPARATION_BUDGET: {preparation_budget}")
         logging.info(f"FORMALIZATION_BUDGET: {formalization_budget}")
         logging.info(f"CRITIC_BUDGET: {critic_budget}")
+        logging.info(f"SECONDARY_BUDGET: {secondary_budget}")
         logging.info(f"MAX_VALIDATION_ITERATIONS: {max_validation_iterations}")
         logging.info(f"SILENT: {silent}")
         logging.info(f"RECORDING: {recording}")
@@ -1167,6 +1323,134 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             _log_agent_message(message)
 
         logging.info(f"Resolver completed for phase '{phase_name}' — retrying.")
+
+    async def _run_escalation_phase(iteration: int, source_label: str | None) -> None:
+        """Escalation phase: run formalization T on stagnant sorry-carrying chunks.
+
+        Tier selection uses a Beta(α,β) bandit over prior outcomes with running wall-clock means.
+        Soft give-up when cumulative secondary spend exceeds SECONDARY_BUDGET.
+        """
+        state_path = Path.cwd() / "bandit_state.json"
+        state = _load_bandit_state(state_path)
+
+        current_sigs = _chunk_body_signatures(Path.cwd(), project_path)
+        _resolve_escalation_outcomes(state, current_sigs)
+        _update_stagnation(state, current_sigs)
+
+        candidates = _stagnant_chunks(state, threshold=2)
+        if not candidates:
+            _save_bandit_state(state_path, state)
+            return
+
+        logging.info(f"[escalation] iteration={iteration} stagnant chunks: {candidates}")
+
+        if secondary_budget is not None and float(state.get("secondary_spend", 0.0)) >= float(secondary_budget):
+            logging.warning(
+                f"[escalation] secondary budget exhausted "
+                f"(${state['secondary_spend']:.4f} / ${secondary_budget:.4f}) — "
+                f"{len(candidates)} chunk(s) unresolved: {candidates}"
+            )
+            _save_bandit_state(state_path, state)
+            return
+
+        tier = _choose_tier(state)
+        env_for_tier = _secondary_env if tier == "B" else _primary_env
+        model_for_tier = "opus" if tier == "B" else "sonnet"
+        fallback_for_tier = "sonnet" if tier == "B" else "haiku"
+        logging.info(f"[escalation] tier={tier} model={model_for_tier}")
+
+        _console.rule(f"[bold magenta]Escalation Phase[/bold magenta] (tier={tier})")
+        _assert_lsp_alive("escalation")
+
+        worktree_assignments: dict[str, str] = {}
+        run_cost = 0.0
+        t_start = time.monotonic()
+        try:
+            with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/T.md", "r") as f:
+                FORMALIZATION_PROMPT = with_library(f.read())
+            with open(_SUBAGENTS_DIR / "FORMALIZATION/DECLARATIONFORMALIZER/T.md", "r") as f:
+                DECLARATIONFORMALIZER_SUBAGENT = f.read()
+            with open(ACTIVE_SUBAGENTS_DIR / "FORMALIZATION/PROOFFORMALIZER/T.md", "r") as f:
+                PROOFFORMALIZER_SUBAGENT = f.read()
+
+            for cid in candidates:
+                wt = _create_worktree(cid, project_path)
+                _symlink_lake_cache(wt, project_path)
+                worktree_assignments[cid] = str(wt)
+            _write_worktrees_manifest(worktree_assignments)
+            logging.info(f"[escalation] worktrees.json written with {len(worktree_assignments)} assignment(s)")
+
+            prefix = f"Escalation pass for {source_label}: " if source_label else "Escalation pass: "
+            escalation_prompt = (
+                f"{prefix}resolve sorries in stagnant chunks {candidates} at {project_path}. "
+                f"Worktree assignments are in worktrees.json at the repository root."
+            )
+
+            async for message in query(
+                prompt=escalation_prompt,
+                options=ClaudeAgentOptions(
+                    tools=_ALL_TOOLS,
+                    allowed_tools=_ALL_TOOLS,
+                    agents={
+                        "declaration-formalizer": AgentDefinition(
+                            description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
+                            prompt=DECLARATIONFORMALIZER_SUBAGENT,
+                            tools=_ALL_TOOLS,
+                        ),
+                        "proof-formalizer": AgentDefinition(
+                            description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
+                            prompt=PROOFFORMALIZER_SUBAGENT,
+                            tools=_ALL_TOOLS,
+                        ),
+                        **LIBRARY_SUBAGENTS,
+                    },
+                    system_prompt=FORMALIZATION_PROMPT,
+                    mcp_servers=LEAN_MCP_SERVER,
+                    hooks=FORUM_HOOKS,
+                    permission_mode=PERMISSIONS,
+                    max_budget_usd=formalization_budget,
+                    enable_file_checkpointing=True,
+                    model=model_for_tier,
+                    fallback_model=fallback_for_tier,
+                    env=env_for_tier,
+                ),
+            ):
+                _log_agent_message(message)
+                if isinstance(message, ResultMessage) and getattr(message, "total_cost_usd", None) is not None:
+                    run_cost = float(message.total_cost_usd)
+
+            _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+        except Exception as e:
+            logging.error(f"ERROR (escalation phase): {e}")
+        finally:
+            for cid, wt in list(worktree_assignments.items()):
+                try:
+                    _cleanup_worktree(Path(wt), project_path, cid)
+                except Exception as cleanup_err:
+                    logging.warning(f"Cleanup failed for {cid} during escalation: {cleanup_err}")
+            _delete_worktrees_manifest()
+
+        t_sec = time.monotonic() - t_start
+        if tier == "B":
+            state["secondary_spend"] = float(state.get("secondary_spend", 0.0)) + run_cost
+
+        for cid in candidates:
+            entry = state["chunks"].setdefault(cid, {"prev_sig": None, "stagnation": 0, "last_escalation": None})
+            entry["last_escalation"] = {
+                "iteration": iteration,
+                "tier": tier,
+                "t_sec": t_sec,
+                "cost": run_cost,
+                "outcome_resolved": False,
+            }
+            entry["stagnation"] = 0
+
+        _save_bandit_state(state_path, state)
+        _append_escalated_log(
+            Path.cwd(), iteration, tier, candidates, run_cost, t_sec,
+            float(state.get("secondary_spend", 0.0)),
+        )
+        _commit_phase("escalation", {"iteration": iteration, "tier": tier, "cost": f"{run_cost:.4f}"})
 
     # Ensure lake cache + update finished before any agent phase starts
     try:
@@ -1630,6 +1914,12 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 previous_sorry_chunks = current_sorry_chunks
             except Exception as e:
                 logging.warning(f"stagnation check failed: {e}")
+
+            # Escalation phase (stagnant chunks only; no-op if none)
+            try:
+                await _run_escalation_phase(iteration, None)
+            except Exception as e:
+                logging.error(f"ERROR (escalation phase): {e}")
 
             # Loop status check
             try:
@@ -2581,6 +2871,12 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             previous_sorry_chunks = current_sorry_chunks
         except Exception as e:
             logging.warning(f"stagnation check failed: {e}")
+
+        # Escalation phase (stagnant chunks only; no-op if none)
+        try:
+            await _run_escalation_phase(iteration, str(source) if source else None)
+        except Exception as e:
+            logging.error(f"ERROR (escalation phase): {e}")
 
         # Critic loop status check
         try:
