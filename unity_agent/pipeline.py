@@ -221,8 +221,7 @@ def _toposort_chunks(language_dir: Path) -> None:
     """Read chunk JSONs from language/chunks/, run Kahn's toposort, write dag.json."""
     chunks_dir = language_dir / "chunks"
     if not chunks_dir.exists():
-        logging.info("No language/chunks/ directory — skipping toposort.")
-        return
+        raise FileNotFoundError(f"No {chunks_dir} directory found — cannot toposort.")
 
     chunks = []
     for f in sorted(chunks_dir.glob("*.json")):
@@ -232,8 +231,7 @@ def _toposort_chunks(language_dir: Path) -> None:
             logging.warning(f"Could not parse chunk file {f}: {e}")
 
     if not chunks:
-        logging.info("No chunk JSON files found — skipping toposort.")
-        return
+        raise FileNotFoundError(f"No chunk JSON files found in {chunks_dir} — cannot toposort.")
 
     chunk_ids = {c["id"] for c in chunks}
     in_degree: dict[str, int] = {c["id"]: 0 for c in chunks}
@@ -1444,7 +1442,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 if isinstance(message, ResultMessage) and getattr(message, "total_cost_usd", None) is not None:
                     run_cost = float(message.total_cost_usd)
 
-            _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+            audit_results = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+            if worktree_assignments and not any(r["committed"] for r in audit_results.values()):
+                raise RuntimeError("Formalization phase failed to commit any changes to worktrees.")
         except Exception as e:
             logging.error(f"ERROR (escalation phase): {e}")
         finally:
@@ -1580,6 +1580,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not (Path("gathered").exists() and any(Path("gathered").iterdir())):
+                    raise FileNotFoundError("Exploration phase failed to produce any gathered content in gathered/")
                 logging.info("Exploration phase completed successfully!")
                 _commit_phase("exploration")
                 break
@@ -1631,6 +1633,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     ):
                         _log_agent_message(message)
 
+                    if not (Path("language/chunks").exists() and list(Path("language/chunks").glob("*.json"))):
+                        raise FileNotFoundError("Generation phase failed to produce any chunk JSON files in language/chunks/")
                     logging.info("Generation phase completed successfully!")
                     _commit_phase("generation")
                     break
@@ -1666,6 +1670,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     ):
                         _log_agent_message(message)
 
+                    if not Path("VALIDATION_REPORT.md").exists():
+                        raise FileNotFoundError("Validation phase failed to produce VALIDATION_REPORT.md")
                     logging.info("Validation phase completed successfully!")
                     _commit_phase("validation")
                     break
@@ -1687,8 +1693,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     validation_iteration += 1
                     logging.info(f"Validator rejected specification — rerunning generator with feedback (iteration {validation_iteration + 1})...")
             except FileNotFoundError:
-                logging.warning("No VALIDATION_REPORT.md found — proceeding anyway.")
-                break
+                logging.error("No VALIDATION_REPORT.md found — retrying validation loop.")
+                validation_iteration += 1
+                continue
 
         # Build DAG from chunk JSON files before semiformalization
         try:
@@ -1735,6 +1742,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not (Path("semiformal/chunks").exists() and list(Path("semiformal/chunks").glob("*.json"))):
+                    raise FileNotFoundError("Semiformalization phase failed to produce any chunk JSON files in semiformal/chunks/")
                 logging.info("Semiformalization phase completed successfully!")
                 try:
                     _assert_semiformal_field_propagation(Path.cwd())
@@ -1820,7 +1829,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _log_agent_message(message)
                     logging.info("[prove-formalization] orchestrator query returned — running post-run audit")
 
-                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    audit_results = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    if worktree_assignments and not any(r["committed"] for r in audit_results.values()):
+                        raise RuntimeError("Formalization phase failed to commit any changes to worktrees.")
 
                     logging.info(f"[prove-formalization] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
@@ -1885,6 +1896,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         ),
                     ):
                         _log_agent_message(message)
+                    if not Path("REPORT.md").exists():
+                        raise FileNotFoundError("Critic phase failed to produce REPORT.md")
                     logging.info("Critic phase completed successfully!")
                     _commit_phase("critic", {"iteration": iteration})
                     break
@@ -2090,6 +2103,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not (Path("language/chunks").exists() and list(Path("language/chunks").glob("*.json"))):
+                    raise FileNotFoundError("Generation phase failed to produce any chunk JSON files in language/chunks/")
                 logging.info("Generation phase completed successfully!")
                 _commit_phase("generation")
                 break
@@ -2125,6 +2140,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not Path("VALIDATION_REPORT.md").exists():
+                    raise FileNotFoundError("Validation phase failed to produce VALIDATION_REPORT.md")
                 logging.info("Validation phase completed successfully!")
                 _commit_phase("validation")
                 break
@@ -2146,8 +2163,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 validation_iteration += 1
                 logging.info(f"Validator rejected specification — rerunning generator with feedback (iteration {validation_iteration + 1})...")
         except FileNotFoundError:
-            logging.warning("No VALIDATION_REPORT.md found — proceeding anyway.")
-            break
+            logging.error("No VALIDATION_REPORT.md found — retrying validation loop.")
+            validation_iteration += 1
+            continue
 
     # Build DAG from chunk JSON files before semiformalization
     try:
@@ -2198,6 +2216,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not (Path("semiformal/chunks").exists() and list(Path("semiformal/chunks").glob("*.json"))):
+                    raise FileNotFoundError("Semiformalization phase failed to produce any chunk JSON files in semiformal/chunks/")
                 logging.info("Semiformalization phase completed successfully!")
                 try:
                     _assert_semiformal_field_propagation(Path.cwd())
@@ -2244,6 +2264,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not (Path("semiformal/chunks").exists() and list(Path("semiformal/chunks").glob("*.json"))):
+                    raise FileNotFoundError("Semiformalization phase failed to produce any chunk JSON files in semiformal/chunks/")
                 logging.info("Semiformalization phase completed successfully!")
                 try:
                     _assert_semiformal_field_propagation(Path.cwd())
@@ -2290,6 +2312,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 ):
                     _log_agent_message(message)
 
+                if not (Path("semiformal/chunks").exists() and list(Path("semiformal/chunks").glob("*.json"))):
+                    raise FileNotFoundError("Semiformalization phase failed to produce any chunk JSON files in semiformal/chunks/")
                 logging.info("Semiformalization phase completed successfully!")
                 try:
                     _assert_semiformal_field_propagation(Path.cwd())
@@ -2363,6 +2387,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         ):
                             _log_agent_message(message)
 
+                        if not (Path("gathered").exists() and any(Path("gathered").iterdir())):
+                            raise FileNotFoundError("Exploration phase failed to produce any gathered content in gathered/")
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
                         break
@@ -2419,6 +2445,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         ):
                             _log_agent_message(message)
 
+                        if not (Path("gathered").exists() and any(Path("gathered").iterdir())):
+                            raise FileNotFoundError("Exploration phase failed to produce any gathered content in gathered/")
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
                         break
@@ -2475,6 +2503,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         ):
                             _log_agent_message(message)
 
+                        if not (Path("gathered").exists() and any(Path("gathered").iterdir())):
+                            raise FileNotFoundError("Exploration phase failed to produce any gathered content in gathered/")
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
                         break
@@ -2531,6 +2561,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         ):
                             _log_agent_message(message)
 
+                        if not (Path("gathered").exists() and any(Path("gathered").iterdir())):
+                            raise FileNotFoundError("Exploration phase failed to produce any gathered content in gathered/")
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
                         break
@@ -2621,7 +2653,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _log_agent_message(message)
                     logging.info("[formalization F] orchestrator query returned — running post-run audit")
 
-                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    audit_results = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    if worktree_assignments and not any(r["committed"] for r in audit_results.values()):
+                        raise RuntimeError("Formalization phase failed to commit any changes to worktrees.")
 
                     logging.info(f"[formalization F] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
@@ -2711,7 +2745,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _log_agent_message(message)
                     logging.info("[formalization T] orchestrator query returned — running post-run audit")
 
-                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    audit_results = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    if worktree_assignments and not any(r["committed"] for r in audit_results.values()):
+                        raise RuntimeError("Formalization phase failed to commit any changes to worktrees.")
 
                     logging.info(f"[formalization T] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
@@ -2785,6 +2821,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     ):
                         _log_agent_message(message)
 
+                    if not Path("REPORT.md").exists():
+                        raise FileNotFoundError("Critic phase failed to produce REPORT.md")
                     logging.info("Critic phase completed successfully!")
                     _commit_phase("critic", {"iteration": iteration})
                     break
@@ -2834,6 +2872,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     ):
                         _log_agent_message(message)
 
+                    if not Path("REPORT.md").exists():
+                        raise FileNotFoundError("Critic phase failed to produce REPORT.md")
                     logging.info("Critic phase completed successfully!")
                     _commit_phase("critic", {"iteration": iteration})
                     break
@@ -2916,8 +2956,9 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 iteration += 1
                 logging.info(f"Critic requested revision — starting iteration {iteration + 1}...")
         except FileNotFoundError:
-            logging.warning("No REPORT.md found after critic phase — stopping loop.")
-            break
+            logging.error("No REPORT.md found after critic phase — retrying critic loop.")
+            iteration += 1
+            continue
 
     try:
         _audit_illegitimate_sorries(Path.cwd(), project_path)
