@@ -1203,7 +1203,7 @@ wheels = [
 
 [[package]]
 name = "unity-agent"
-version = "0.3.10"
+version = "0.3.14"
 source = { editable = "." }
 dependencies = [
     { name = "asyncclick" },

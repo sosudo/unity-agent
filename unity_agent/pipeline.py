@@ -90,6 +90,22 @@ def _commit_phase(phase_name: str, metadata: dict | None = None) -> None:
         pass
 
 
+_JSON_ESCAPE_OR_STRAY = re.compile(r'\\(?:["\\/bfnrtu]|u[0-9a-fA-F]{4})|\\')
+
+
+def _load_chunk_json(path: Path):
+    """Parse chunk JSON, repairing stray LaTeX backslashes that weaker models leave unescaped."""
+    text = path.read_text()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        def _fix(m: re.Match) -> str:
+            s = m.group(0)
+            return s if len(s) > 1 else '\\\\'
+        repaired = _JSON_ESCAPE_OR_STRAY.sub(_fix, text)
+        return json.loads(repaired)
+
+
 def _is_lean_repo(path: Path) -> bool:
     return (path / "lean-toolchain").exists() and (
         (path / "lakefile.lean").exists() or (path / "lakefile.toml").exists()
@@ -227,7 +243,7 @@ def _toposort_chunks(language_dir: Path) -> None:
     chunks = []
     for f in sorted(chunks_dir.glob("*.json")):
         try:
-            chunks.append(json.loads(f.read_text()))
+            chunks.append(_load_chunk_json(f))
         except Exception as e:
             logging.warning(f"Could not parse chunk file {f}: {e}")
 
@@ -482,7 +498,7 @@ def _audit_illegitimate_sorries(run_dir: Path, project_path: Path) -> list[dict]
     by_file: dict[Path, list[dict]] = {}
     for chunk_id, chunk_path in chunk_files.items():
         try:
-            chunk = json.loads(chunk_path.read_text())
+            chunk = _load_chunk_json(chunk_path)
         except Exception as e:
             logging.warning(f"audit: failed to read {chunk_path}: {e}")
             continue
@@ -552,7 +568,7 @@ def _collect_chunk_sorry_set(run_dir: Path, project_path: Path) -> frozenset[str
     by_file: dict[Path, list[dict]] = {}
     for chunk_id, chunk_path in seen.items():
         try:
-            chunk = json.loads(chunk_path.read_text())
+            chunk = _load_chunk_json(chunk_path)
         except Exception:
             continue
         decl = chunk.get("lean_declaration") or {}
@@ -597,7 +613,7 @@ def _chunk_body_signatures(run_dir: Path, project_path: Path) -> dict[str, tuple
     by_file: dict[Path, list[dict]] = {}
     for chunk_id, chunk_path in seen.items():
         try:
-            chunk = json.loads(chunk_path.read_text())
+            chunk = _load_chunk_json(chunk_path)
         except Exception:
             continue
         decl = chunk.get("lean_declaration") or {}
@@ -660,16 +676,13 @@ def _save_bandit_state(path: Path, state: dict) -> None:
 
 
 def _update_stagnation(state: dict, current_sigs: dict[str, tuple[str, bool]]) -> None:
-    """Bump stagnation counter for chunks whose (body_hash, has_sorry) is unchanged *and* still has sorry."""
+    """Bump stagnation counter for any chunk that still carries a sorry, regardless of body edits."""
     for cid, (h, s) in current_sigs.items():
         entry = state["chunks"].setdefault(cid, {"prev_sig": None, "stagnation": 0, "last_escalation": None})
-        prev = entry.get("prev_sig")
         if not s:
             entry["stagnation"] = 0
-        elif prev is not None and prev[0] == h and prev[1] == s:
-            entry["stagnation"] = int(entry.get("stagnation", 0)) + 1
         else:
-            entry["stagnation"] = 1
+            entry["stagnation"] = int(entry.get("stagnation", 0)) + 1
         entry["prev_sig"] = [h, s]
 
 
@@ -756,8 +769,8 @@ def _assert_semiformal_field_propagation(run_dir: Path) -> list[dict]:
             drifts.append({"chunk_id": chunk_id, "field": "(missing language chunk)", "language": None, "semiformal": None})
             continue
         try:
-            lang = json.loads(lang_path.read_text())
-            semi = json.loads(semi_path.read_text())
+            lang = _load_chunk_json(lang_path)
+            semi = _load_chunk_json(semi_path)
         except Exception as e:
             drifts.append({"chunk_id": chunk_id, "field": f"(parse error: {e})", "language": None, "semiformal": None})
             continue
@@ -1230,10 +1243,18 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"Recursive unity subagent registered (child depth: {child_depth})")
 
     def with_library(prompt: str) -> str:
-        """Append library context to a prompt if any exists."""
-        if not library_context:
-            return prompt
-        return prompt + "\n\n---\n\n" + library_context
+        """Append library context and tool-naming reminder to a prompt."""
+        tool_note = (
+            "\n\n---\n\n"
+            "**Tool naming:** MCP forum tools are named with a HYPHEN: "
+            "`mcp__unity-forum__forum_post`, `mcp__unity-forum__forum_create_thread`, etc. "
+            "Not `mcp__unity_forum__*` (underscore) and not bare `forum_post` via Skill. "
+            "Any other spelling will silently no-op."
+        )
+        out = prompt + tool_note
+        if library_context:
+            out = out + "\n\n---\n\n" + library_context
+        return out
 
     # Resolver infrastructure
     _retries: dict[str, int] = {}
@@ -1587,35 +1608,40 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     if validation_iteration > 0:
                         generation_prompt += " VALIDATION_REPORT.md contains feedback from the previous validation attempt — use it to refine the specification."
 
-                    async for message in query(
-                        prompt=generation_prompt,
-                        options=ClaudeAgentOptions(
-                            tools=_ALL_TOOLS,
-                            allowed_tools=_ALL_TOOLS,
-                            agents={
-                                "generator": AgentDefinition(
-                                    description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
-                                    prompt=GENERATOR_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                **LIBRARY_SUBAGENTS
-                            },
-                            system_prompt=GENERATION_PROMPT,
-                            mcp_servers=LEAN_MCP_SERVER,
-                            hooks=FORUM_HOOKS,
-                            permission_mode=PERMISSIONS,
-                            max_budget_usd=generation_budget,
+                    _gen_opts = ClaudeAgentOptions(
+                        tools=_ALL_TOOLS,
+                        allowed_tools=_ALL_TOOLS,
+                        agents={
+                            "generator": AgentDefinition(
+                                description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
+                                prompt=GENERATOR_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            **LIBRARY_SUBAGENTS
+                        },
+                        system_prompt=GENERATION_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        hooks=FORUM_HOOKS,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=generation_budget,
 
-                            enable_file_checkpointing=True,
-                            model="opus",
-                            fallback_model="sonnet",
-                            env=_primary_env,
-
-                        ),
-                    ):
+                        enable_file_checkpointing=True,
+                        model="opus",
+                        fallback_model="sonnet",
+                        env=_primary_env,
+                    )
+                    async for message in query(prompt=generation_prompt, options=_gen_opts):
                         _log_agent_message(message)
 
                     logging.info("Generation phase completed successfully!")
+                    _chunks_dir = Path("language") / "chunks"
+                    if not _chunks_dir.exists() or not any(_chunks_dir.glob("*.json")):
+                        logging.warning("[generation] contract breach: language/chunks/ is empty — one-shot repair")
+                        async for message in query(
+                            prompt="You completed the generation phase but language/chunks/ is empty. Write the chunk JSON files now per language/chunk-schema.json. Reminder: JSON strings containing LaTeX must escape every backslash — write \\\\mathbb not \\mathbb, \\\\forall not \\forall.",
+                            options=_gen_opts,
+                        ):
+                            _log_agent_message(message)
                     _commit_phase("generation")
                     break
                 except Exception as e:
@@ -1629,28 +1655,35 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     with open(PROMPTS_DIR / "VALIDATION.md", "r") as f:
                         VALIDATION_PROMPT = with_library(f.read())
 
+                    _val_opts = ClaudeAgentOptions(
+                        tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                        allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                        agents={**LIBRARY_SUBAGENTS},
+                        system_prompt=VALIDATION_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        hooks=FORUM_HOOKS,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=validation_budget,
+
+                        enable_file_checkpointing=True,
+                        model="sonnet",
+                        fallback_model="haiku",
+                        env=_primary_env,
+                    )
                     async for message in query(
                         prompt=f"Validate the IR specification generated for the gathered content in `gathered/`.",
-                        options=ClaudeAgentOptions(
-                            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                            allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                            agents={**LIBRARY_SUBAGENTS},
-                            system_prompt=VALIDATION_PROMPT,
-                            mcp_servers=LEAN_MCP_SERVER,
-                            hooks=FORUM_HOOKS,
-                            permission_mode=PERMISSIONS,
-                            max_budget_usd=validation_budget,
-
-                            enable_file_checkpointing=True,
-                            model="sonnet",
-                            fallback_model="haiku",
-                            env=_primary_env,
-
-                        ),
+                        options=_val_opts,
                     ):
                         _log_agent_message(message)
 
                     logging.info("Validation phase completed successfully!")
+                    if not Path("VALIDATION_REPORT.md").exists():
+                        logging.warning("[validation] contract breach: VALIDATION_REPORT.md missing — one-shot repair")
+                        async for message in query(
+                            prompt="You completed the validation phase but VALIDATION_REPORT.md does not exist in the run directory. Write it now with per-check PASS/FAIL and an overall `**Status:** VALID` or `**Status:** INVALID` line.",
+                            options=_val_opts,
+                        ):
+                            _log_agent_message(message)
                     _commit_phase("validation")
                     break
                 except SystemExit:
@@ -1837,39 +1870,46 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     with open(_SUBAGENTS_DIR / "CRITIC/PROOFFORMALIZER/T.md", "r") as f:
                         PROOFFORMALIZER_SUBAGENT = f.read()
 
+                    _crit_opts = ClaudeAgentOptions(
+                        tools=_ALL_TOOLS,
+                        allowed_tools=_ALL_TOOLS,
+                        agents={
+                            "declaration-formalizer": AgentDefinition(
+                                description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
+                                prompt=DECLARATIONFORMALIZER_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            "proof-formalizer": AgentDefinition(
+                                description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
+                                prompt=PROOFFORMALIZER_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            **LIBRARY_SUBAGENTS
+                        },
+                        system_prompt=CRITIC_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        hooks=FORUM_HOOKS,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=critic_budget,
+
+                        enable_file_checkpointing=True,
+                        model="opus",
+                        fallback_model="sonnet",
+                        env=_primary_env,
+                    )
                     async for message in query(
                         prompt=f"Critique {project_path} given semiformalization `semiformal/` and specification language `language/`.",
-                        options=ClaudeAgentOptions(
-                            tools=_ALL_TOOLS,
-                            allowed_tools=_ALL_TOOLS,
-                            agents={
-                                "declaration-formalizer": AgentDefinition(
-                                    description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
-                                    prompt=DECLARATIONFORMALIZER_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                "proof-formalizer": AgentDefinition(
-                                    description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
-                                    prompt=PROOFFORMALIZER_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                **LIBRARY_SUBAGENTS
-                            },
-                            system_prompt=CRITIC_PROMPT,
-                            mcp_servers=LEAN_MCP_SERVER,
-                            hooks=FORUM_HOOKS,
-                            permission_mode=PERMISSIONS,
-                            max_budget_usd=critic_budget,
-
-                            enable_file_checkpointing=True,
-                            model="opus",
-                            fallback_model="sonnet",
-                            env=_primary_env,
-
-                        ),
+                        options=_crit_opts,
                     ):
                         _log_agent_message(message)
                     logging.info("Critic phase completed successfully!")
+                    if not Path("REPORT.md").exists():
+                        logging.warning("[critic] contract breach: REPORT.md missing — one-shot repair")
+                        async for message in query(
+                            prompt="You completed the critic phase but REPORT.md does not exist in the run directory. Write it now with per-chunk status and an overall status line (`**Status:** RESOLVED` or `**Status:** NEEDS_REVISION`).",
+                            options=_crit_opts,
+                        ):
+                            _log_agent_message(message)
                     _commit_phase("critic", {"iteration": iteration})
                     break
                 except Exception as e:
@@ -2046,35 +2086,40 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 if validation_iteration > 0:
                     generation_prompt += " VALIDATION_REPORT.md contains feedback from the previous validation attempt — use it to refine the specification."
 
-                async for message in query(
-                    prompt=generation_prompt,
-                    options=ClaudeAgentOptions(
-                        tools=_ALL_TOOLS,
-                        allowed_tools=_ALL_TOOLS,
-                        agents={
-                            "generator": AgentDefinition(
-                                description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
-                                prompt=GENERATOR_SUBAGENT,
-                                tools=_ALL_TOOLS
-                            ),
-                            **LIBRARY_SUBAGENTS
-                        },
-                        system_prompt=GENERATION_PROMPT,
-                        mcp_servers=LEAN_MCP_SERVER,
-                        hooks=FORUM_HOOKS,
-                        permission_mode=PERMISSIONS,
-                        max_budget_usd=generation_budget,
+                _gen_opts = ClaudeAgentOptions(
+                    tools=_ALL_TOOLS,
+                    allowed_tools=_ALL_TOOLS,
+                    agents={
+                        "generator": AgentDefinition(
+                            description="Generator subagent. Capable of assisting in the design of a semiformal specification language for a given source.",
+                            prompt=GENERATOR_SUBAGENT,
+                            tools=_ALL_TOOLS
+                        ),
+                        **LIBRARY_SUBAGENTS
+                    },
+                    system_prompt=GENERATION_PROMPT,
+                    mcp_servers=LEAN_MCP_SERVER,
+                    hooks=FORUM_HOOKS,
+                    permission_mode=PERMISSIONS,
+                    max_budget_usd=generation_budget,
 
-                        enable_file_checkpointing=True,
-                        model="opus",
-                        fallback_model="sonnet",
-                        env=_primary_env,
-
-                    ),
-                ):
+                    enable_file_checkpointing=True,
+                    model="opus",
+                    fallback_model="sonnet",
+                    env=_primary_env,
+                )
+                async for message in query(prompt=generation_prompt, options=_gen_opts):
                     _log_agent_message(message)
 
                 logging.info("Generation phase completed successfully!")
+                _chunks_dir = Path("language") / "chunks"
+                if not _chunks_dir.exists() or not any(_chunks_dir.glob("*.json")):
+                    logging.warning("[generation] contract breach: language/chunks/ is empty — one-shot repair")
+                    async for message in query(
+                        prompt="You completed the generation phase but language/chunks/ is empty. Write the chunk JSON files now per language/chunk-schema.json. Reminder: JSON strings containing LaTeX must escape every backslash — write \\\\mathbb not \\mathbb, \\\\forall not \\forall.",
+                        options=_gen_opts,
+                    ):
+                        _log_agent_message(message)
                 _commit_phase("generation")
                 break
             except Exception as e:
@@ -2088,28 +2133,35 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 with open(PROMPTS_DIR / "VALIDATION.md", "r") as f:
                     VALIDATION_PROMPT = with_library(f.read())
 
+                _val_opts = ClaudeAgentOptions(
+                    tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                    allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
+                    agents={**LIBRARY_SUBAGENTS},
+                    system_prompt=VALIDATION_PROMPT,
+                    mcp_servers=LEAN_MCP_SERVER,
+                    hooks=FORUM_HOOKS,
+                    permission_mode=PERMISSIONS,
+                    max_budget_usd=validation_budget,
+
+                    enable_file_checkpointing=True,
+                    model="sonnet",
+                    fallback_model="haiku",
+                    env=_primary_env,
+                )
                 async for message in query(
                     prompt=f"Validate the IR specification generated for {source}.",
-                    options=ClaudeAgentOptions(
-                        tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                        allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"],
-                        agents={**LIBRARY_SUBAGENTS},
-                        system_prompt=VALIDATION_PROMPT,
-                        mcp_servers=LEAN_MCP_SERVER,
-                        hooks=FORUM_HOOKS,
-                        permission_mode=PERMISSIONS,
-                        max_budget_usd=validation_budget,
-
-                        enable_file_checkpointing=True,
-                        model="sonnet",
-                        fallback_model="haiku",
-                        env=_primary_env,
-
-                    ),
+                    options=_val_opts,
                 ):
                     _log_agent_message(message)
 
                 logging.info("Validation phase completed successfully!")
+                if not Path("VALIDATION_REPORT.md").exists():
+                    logging.warning("[validation] contract breach: VALIDATION_REPORT.md missing — one-shot repair")
+                    async for message in query(
+                        prompt="You completed the validation phase but VALIDATION_REPORT.md does not exist in the run directory. Write it now with per-check PASS/FAIL and an overall `**Status:** VALID` or `**Status:** INVALID` line.",
+                        options=_val_opts,
+                    ):
+                        _log_agent_message(message)
                 _commit_phase("validation")
                 break
             except SystemExit:
@@ -2736,40 +2788,47 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     with open(_SUBAGENTS_DIR / "CRITIC/PROOFFORMALIZER/F.md", "r") as f:
                         PROOFFORMALIZER_SUBAGENT = f.read()
 
+                    _crit_opts = ClaudeAgentOptions(
+                        tools=_ALL_TOOLS,
+                        allowed_tools=_ALL_TOOLS,
+                        agents={
+                            "declaration-formalizer": AgentDefinition(
+                                description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
+                                prompt=DECLARATIONFORMALIZER_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            "proof-formalizer": AgentDefinition(
+                                description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
+                                prompt=PROOFFORMALIZER_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            **LIBRARY_SUBAGENTS
+                        },
+                        system_prompt=CRITIC_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        hooks=FORUM_HOOKS,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=critic_budget,
+
+                        enable_file_checkpointing=True,
+                        model="opus",
+                        fallback_model="sonnet",
+                        env=_primary_env,
+                    )
                     async for message in query(
                         prompt=f"Critique {project_path} given source {source}, semiformalization `semiformal/`, and specification language `language/`.",
-                        options=ClaudeAgentOptions(
-                            tools=_ALL_TOOLS,
-                            allowed_tools=_ALL_TOOLS,
-                            agents={
-                                "declaration-formalizer": AgentDefinition(
-                                    description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
-                                    prompt=DECLARATIONFORMALIZER_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                "proof-formalizer": AgentDefinition(
-                                    description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
-                                    prompt=PROOFFORMALIZER_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                **LIBRARY_SUBAGENTS
-                            },
-                            system_prompt=CRITIC_PROMPT,
-                            mcp_servers=LEAN_MCP_SERVER,
-                            hooks=FORUM_HOOKS,
-                            permission_mode=PERMISSIONS,
-                            max_budget_usd=critic_budget,
-
-                            enable_file_checkpointing=True,
-                            model="opus",
-                            fallback_model="sonnet",
-                            env=_primary_env,
-
-                        ),
+                        options=_crit_opts,
                     ):
                         _log_agent_message(message)
 
                     logging.info("Critic phase completed successfully!")
+                    if not Path("REPORT.md").exists():
+                        logging.warning("[critic] contract breach: REPORT.md missing — one-shot repair")
+                        async for message in query(
+                            prompt="You completed the critic phase but REPORT.md does not exist in the run directory. Write it now with per-chunk status and an overall status line (`**Status:** RESOLVED` or `**Status:** NEEDS_REVISION`).",
+                            options=_crit_opts,
+                        ):
+                            _log_agent_message(message)
                     _commit_phase("critic", {"iteration": iteration})
                     break
                 except Exception as e:
@@ -2785,40 +2844,47 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     with open(_SUBAGENTS_DIR / "CRITIC/PROOFFORMALIZER/T.md", "r") as f:
                         PROOFFORMALIZER_SUBAGENT = f.read()
 
+                    _crit_opts = ClaudeAgentOptions(
+                        tools=_ALL_TOOLS,
+                        allowed_tools=_ALL_TOOLS,
+                        agents={
+                            "declaration-formalizer": AgentDefinition(
+                                description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
+                                prompt=DECLARATIONFORMALIZER_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            "proof-formalizer": AgentDefinition(
+                                description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
+                                prompt=PROOFFORMALIZER_SUBAGENT,
+                                tools=_ALL_TOOLS
+                            ),
+                            **LIBRARY_SUBAGENTS
+                        },
+                        system_prompt=CRITIC_PROMPT,
+                        mcp_servers=LEAN_MCP_SERVER,
+                        hooks=FORUM_HOOKS,
+                        permission_mode=PERMISSIONS,
+                        max_budget_usd=critic_budget,
+
+                        enable_file_checkpointing=True,
+                        model="opus",
+                        fallback_model="sonnet",
+                        env=_primary_env,
+                    )
                     async for message in query(
                         prompt=f"Critique {project_path} given source {source}, semiformalization `semiformal/`, and specification language `language/`.",
-                        options=ClaudeAgentOptions(
-                            tools=_ALL_TOOLS,
-                            allowed_tools=_ALL_TOOLS,
-                            agents={
-                                "declaration-formalizer": AgentDefinition(
-                                    description="DeclarationFormalizer subagent. Capable of formalizing a declaration or statement of a specific chunk into Lean4.",
-                                    prompt=DECLARATIONFORMALIZER_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                "proof-formalizer": AgentDefinition(
-                                    description="ProofFormalizer subagent. Capable of formalizing the proof of a specific chunk into Lean4.",
-                                    prompt=PROOFFORMALIZER_SUBAGENT,
-                                    tools=_ALL_TOOLS
-                                ),
-                                **LIBRARY_SUBAGENTS
-                            },
-                            system_prompt=CRITIC_PROMPT,
-                            mcp_servers=LEAN_MCP_SERVER,
-                            hooks=FORUM_HOOKS,
-                            permission_mode=PERMISSIONS,
-                            max_budget_usd=critic_budget,
-
-                            enable_file_checkpointing=True,
-                            model="opus",
-                            fallback_model="sonnet",
-                            env=_primary_env,
-
-                        ),
+                        options=_crit_opts,
                     ):
                         _log_agent_message(message)
 
                     logging.info("Critic phase completed successfully!")
+                    if not Path("REPORT.md").exists():
+                        logging.warning("[critic] contract breach: REPORT.md missing — one-shot repair")
+                        async for message in query(
+                            prompt="You completed the critic phase but REPORT.md does not exist in the run directory. Write it now with per-chunk status and an overall status line (`**Status:** RESOLVED` or `**Status:** NEEDS_REVISION`).",
+                            options=_crit_opts,
+                        ):
+                            _log_agent_message(message)
                     _commit_phase("critic", {"iteration": iteration})
                     break
                 except Exception as e:

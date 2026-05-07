@@ -21,6 +21,12 @@ forum2/
 forum3/
 forum_c/
 source
+poster.aux
+poster.log
+poster.pdf
+poster.tex
+sample.pdf
+unity.pdf
 
 # Claude files
 .claude/
