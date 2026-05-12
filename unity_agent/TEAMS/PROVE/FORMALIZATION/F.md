@@ -130,7 +130,7 @@ After all layer merges, run a build from `<project_path>` — prefer `lake build
 
 Do not run `git worktree remove` yourself — the pipeline cleans up worktrees at end-of-phase.
 
-Once all declarations compile successfully across all chunks, update `dag.json` (at the unity run dir, your CWD): for each chunk, set `lean_file` to the path of the Lean file containing its declaration **relative to the unity run dir** (e.g. `myproj/MyProj/Foo.lean`, not `MyProj/Foo.lean` or an absolute path) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time.
+Once all declarations compile successfully across all chunks, update `dag.json` (at the unity run dir, your CWD): for each chunk, set `lean_file` to the path of the Lean file containing its declaration **relative to the unity run dir** (e.g. `myproj/MyProj/Foo.lean`, not `MyProj/Foo.lean` or an absolute path) and `lean_decl_lines` to `[start_line, end_line]` (1-indexed, inclusive, covering the full declaration body). This allows the forum web UI to track formalization status in real time. In the same pass, also update each chunk's JSON at `semiformal/chunks/<id>.json` (or `language/chunks/<id>.json` if `semiformal/chunks/` is absent): set `lean_declaration.file` to the same relative path and `lean_declaration.line` to `start_line`. The stagnation/escalation tracker keys off this field — if it stays null for a chunk, that chunk is silently skipped and will never trigger escalation even when its `sorry` persists across iterations.
 
 Then commit the target Lean project with a `UNITY:` prefix before proceeding to the proof step.
 

@@ -479,15 +479,21 @@ def _strip_lean_comments(src: str) -> str:
     return src
 
 
-def _audit_illegitimate_sorries(run_dir: Path, project_path: Path) -> list[dict]:
-    """Scan non-assumption chunks for sorry in their Lean declaration body.
+def _strip_lean_comments_preserve_lines(src: str) -> str:
+    """Strip Lean block and line comments, replacing interior chars with spaces so line numbers stay stable."""
+    src = re.sub(r"/-.*?-/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), src, flags=re.DOTALL)
+    src = re.sub(r"--[^\n]*", lambda m: " " * len(m.group(0)), src)
+    return src
 
-    Returns a list of violation records and writes ILLEGITIMATE_SORRIES.md.
-    An illegitimate sorry is any `\\bsorry\\b` (post-comment-strip) in the body
-    of a chunk whose is_assumption is False. The body runs from the chunk's
-    lean_declaration.line up to the next top-level declaration start.
+
+def _audit_illegitimate_sorries(run_dir: Path, project_path: Path) -> list[dict]:
+    """Scan the project for any `sorry` not inside an `is_assumption: true` chunk body.
+
+    Returns a list of violation records and writes ILLEGITIMATE_SORRIES.md. A sorry is
+    *legitimate* iff it lies within the declaration body of a chunk whose `is_assumption`
+    is True. Every other `\\bsorry\\b` — including those in formalizer-introduced helper
+    lemmas (cascade sorries) — is a violation.
     """
-    violations: list[dict] = []
     chunk_dirs = [run_dir / "semiformal" / "chunks", run_dir / "language" / "chunks"]
     chunk_files: dict[str, Path] = {}
     for cd in chunk_dirs:
@@ -495,65 +501,111 @@ def _audit_illegitimate_sorries(run_dir: Path, project_path: Path) -> list[dict]
             for p in sorted(cd.glob("*.json")):
                 chunk_files.setdefault(p.stem, p)
 
-    by_file: dict[Path, list[dict]] = {}
+    intervals_by_file: dict[Path, list[tuple[int, int, str, bool]]] = {}
     for chunk_id, chunk_path in chunk_files.items():
         try:
             chunk = _load_chunk_json(chunk_path)
         except Exception as e:
             logging.warning(f"audit: failed to read {chunk_path}: {e}")
             continue
-        if chunk.get("is_assumption"):
+        loc = _resolve_chunk_decl_loc(chunk_id, chunk, run_dir)
+        if loc is None:
             continue
-        decl = chunk.get("lean_declaration") or {}
-        file_rel = decl.get("file")
-        line = decl.get("line")
-        if not file_rel or not isinstance(line, int):
-            continue
+        file_rel, line = loc
         lean_file = (project_path / file_rel).resolve()
-        by_file.setdefault(lean_file, []).append({"id": chunk_id, "line": line})
+        intervals_by_file.setdefault(lean_file, []).append(
+            (line, -1, chunk_id, bool(chunk.get("is_assumption")))
+        )
 
-    for lean_file, entries in by_file.items():
+    resolved_intervals: dict[Path, list[tuple[int, int, str, bool]]] = {}
+    for lean_file, entries in intervals_by_file.items():
         try:
             text = lean_file.read_text()
-        except Exception as e:
-            logging.warning(f"audit: cannot read {lean_file}: {e}")
+        except Exception:
             continue
-        lines = text.splitlines()
+        lines_count = len(text.splitlines())
         decl_starts = sorted({
-            i + 1 for i, ln in enumerate(lines) if _TOP_LEVEL_DECL.match(ln)
+            i + 1 for i, ln in enumerate(text.splitlines()) if _TOP_LEVEL_DECL.match(ln)
         })
-        entries.sort(key=lambda e: e["line"])
-        for entry in entries:
-            start = entry["line"]
-            end = len(lines)
+        resolved = []
+        for start, _, cid, is_asm in sorted(entries):
+            end = lines_count
             for s in decl_starts:
                 if s > start:
                     end = s - 1
                     break
-            if start < 1 or start > len(lines):
+            resolved.append((start, end, cid, is_asm))
+        resolved_intervals[lean_file] = resolved
+
+    violations: list[dict] = []
+    for lean_file in project_path.rglob("*.lean"):
+        if any(p in (".lake", "lake-packages", "build") for p in lean_file.parts):
+            continue
+        try:
+            text = lean_file.read_text()
+        except Exception:
+            continue
+        stripped = _strip_lean_comments_preserve_lines(text)
+        intervals = resolved_intervals.get(lean_file.resolve(), [])
+        for idx, ln in enumerate(stripped.splitlines(), start=1):
+            if not re.search(r"\bsorry\b", ln):
                 continue
-            body = "\n".join(lines[start - 1:end])
-            stripped = _strip_lean_comments(body)
-            if re.search(r"\bsorry\b", stripped):
-                violations.append({
-                    "chunk_id": entry["id"],
-                    "file": str(lean_file.relative_to(project_path)) if lean_file.is_relative_to(project_path) else str(lean_file),
-                    "line": start,
-                })
+            containing = next(
+                ((cid, is_asm) for (s, e, cid, is_asm) in intervals if s <= idx <= e),
+                None,
+            )
+            if containing is not None and containing[1]:
+                continue  # legitimate: inside an is_assumption chunk body
+            rel = str(lean_file.relative_to(project_path)) if lean_file.is_relative_to(project_path) else str(lean_file)
+            violations.append({
+                "chunk_id": containing[0] if containing else None,
+                "file": rel,
+                "line": idx,
+            })
 
     for v in violations:
-        logging.error(f"ILLEGITIMATE sorry in non-assumption chunk {v['chunk_id']} at {v['file']}:{v['line']}")
+        cid = v["chunk_id"] or "<outside any tracked chunk>"
+        logging.error(f"ILLEGITIMATE sorry at {v['file']}:{v['line']} (chunk: {cid})")
 
     report_path = run_dir / "ILLEGITIMATE_SORRIES.md"
     if violations:
-        lines_out = ["# Illegitimate Sorries", "", f"Found {len(violations)} non-assumption chunk(s) with `sorry` in body.", ""]
+        lines_out = [
+            "# Illegitimate Sorries", "",
+            f"Found {len(violations)} illegitimate `sorry` occurrence(s). "
+            f"A sorry is legitimate only inside an `is_assumption: true` chunk body; "
+            f"helper-lemma (\"cascade\") sorries and sorries in non-assumption chunks are violations.", "",
+        ]
         for v in violations:
-            lines_out.append(f"- `{v['chunk_id']}` — {v['file']}:{v['line']}")
+            cid = v["chunk_id"] or "outside any tracked chunk"
+            lines_out.append(f"- {v['file']}:{v['line']} — {cid}")
         report_path.write_text("\n".join(lines_out) + "\n")
     else:
         report_path.write_text("# Illegitimate Sorries\n\nNone detected.\n")
 
     return violations
+
+
+def _resolve_chunk_decl_loc(chunk_id: str, chunk: dict, run_dir: Path) -> tuple[str, int] | None:
+    """Resolve (file_rel, line) for a chunk's Lean declaration.
+    Prefers chunk JSON's `lean_declaration`; falls back to dag.json's `lean_file`/`lean_decl_lines`."""
+    decl = chunk.get("lean_declaration") or {}
+    file_rel = decl.get("file")
+    line = decl.get("line")
+    if file_rel and isinstance(line, int):
+        return file_rel, line
+    try:
+        dag = json.loads((run_dir / "dag.json").read_text())
+    except Exception:
+        return None
+    for node in dag.get("chunks") or []:
+        if node.get("id") != chunk_id:
+            continue
+        f = node.get("lean_file")
+        lines = node.get("lean_decl_lines")
+        if f and isinstance(lines, list) and lines and isinstance(lines[0], int):
+            return f, lines[0]
+        break
+    return None
 
 
 def _collect_chunk_sorry_set(run_dir: Path, project_path: Path) -> frozenset[str]:
@@ -571,11 +623,10 @@ def _collect_chunk_sorry_set(run_dir: Path, project_path: Path) -> frozenset[str
             chunk = _load_chunk_json(chunk_path)
         except Exception:
             continue
-        decl = chunk.get("lean_declaration") or {}
-        file_rel = decl.get("file")
-        line = decl.get("line")
-        if not file_rel or not isinstance(line, int):
+        loc = _resolve_chunk_decl_loc(chunk_id, chunk, run_dir)
+        if loc is None:
             continue
+        file_rel, line = loc
         by_file.setdefault((project_path / file_rel).resolve(), []).append({"id": chunk_id, "line": line})
     for lean_file, entries in by_file.items():
         try:
@@ -616,11 +667,10 @@ def _chunk_body_signatures(run_dir: Path, project_path: Path) -> dict[str, tuple
             chunk = _load_chunk_json(chunk_path)
         except Exception:
             continue
-        decl = chunk.get("lean_declaration") or {}
-        file_rel = decl.get("file")
-        line = decl.get("line")
-        if not file_rel or not isinstance(line, int):
+        loc = _resolve_chunk_decl_loc(chunk_id, chunk, run_dir)
+        if loc is None:
             continue
+        file_rel, line = loc
         by_file.setdefault((project_path / file_rel).resolve(), []).append({"id": chunk_id, "line": line})
     for lean_file, entries in by_file.items():
         try:
@@ -648,14 +698,7 @@ def _chunk_body_signatures(run_dir: Path, project_path: Path) -> dict[str, tuple
 
 
 def _default_bandit_state() -> dict:
-    return {
-        "chunks": {},
-        "bandit": {
-            "A": {"alpha": 1.0, "beta": 1.0, "t_mean": 0.0, "n": 0},
-            "B": {"alpha": 1.0, "beta": 1.0, "t_mean": 0.0, "n": 0},
-        },
-        "secondary_spend": 0.0,
-    }
+    return {"chunks": {}, "secondary_spend": 0.0}
 
 
 def _load_bandit_state(path: Path) -> dict:
@@ -663,7 +706,6 @@ def _load_bandit_state(path: Path) -> dict:
         try:
             state = json.loads(path.read_text())
             state.setdefault("chunks", {})
-            state.setdefault("bandit", _default_bandit_state()["bandit"])
             state.setdefault("secondary_spend", 0.0)
             return state
         except Exception:
@@ -694,36 +736,8 @@ def _stagnant_chunks(state: dict, threshold: int = 2) -> list[str]:
     )
 
 
-def _update_bandit_belief(state: dict, tier: str, success: bool, t_sec: float) -> None:
-    b = state["bandit"][tier]
-    if success:
-        b["alpha"] = float(b["alpha"]) + 1.0
-    else:
-        b["beta"] = float(b["beta"]) + 1.0
-    n = int(b.get("n", 0))
-    b["t_mean"] = (float(b.get("t_mean", 0.0)) * n + float(t_sec)) / (n + 1)
-    b["n"] = n + 1
-
-
-def _choose_tier(state: dict) -> str:
-    """Pick A (primary) or B (secondary). Cold-start defers to B; else min(t/E[p]) wins."""
-    A = state["bandit"]["A"]
-    B = state["bandit"]["B"]
-    if int(A.get("n", 0)) == 0 or int(B.get("n", 0)) == 0:
-        return "B"
-    ep_A = float(A["alpha"]) / (float(A["alpha"]) + float(A["beta"]))
-    ep_B = float(B["alpha"]) / (float(B["alpha"]) + float(B["beta"]))
-    if ep_A <= 0.0:
-        return "B"
-    if ep_B <= 0.0:
-        return "A"
-    score_A = float(A["t_mean"]) / ep_A
-    score_B = float(B["t_mean"]) / ep_B
-    return "A" if score_A <= score_B else "B"
-
-
 def _resolve_escalation_outcomes(state: dict, current_sigs: dict[str, tuple[str, bool]]) -> None:
-    """For each chunk with an unresolved prior escalation, credit/penalise its tier based on current sorry presence."""
+    """For each chunk with an unresolved prior escalation, record whether the sorry is now gone."""
     for cid, entry in state["chunks"].items():
         last = entry.get("last_escalation")
         if not last or last.get("outcome_resolved"):
@@ -731,10 +745,8 @@ def _resolve_escalation_outcomes(state: dict, current_sigs: dict[str, tuple[str,
         sig = current_sigs.get(cid)
         if sig is None:
             continue
-        success = not sig[1]  # success := sorry is gone
-        _update_bandit_belief(state, last["tier"], success, float(last.get("t_sec", 0.0)))
         last["outcome_resolved"] = True
-        last["success"] = success
+        last["success"] = not sig[1]  # sorry gone
 
 
 def _append_escalated_log(run_dir: Path, iteration: int, tier: str, chunks: list[str], cost: float, t_sec: float, secondary_spend_total: float) -> None:
@@ -1057,9 +1069,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             logging.critical("CRITICAL: --prove without --source requires --context/-c")
             exit(1)
 
-        if prove and source is None and not exploration:
-            logging.critical("CRITICAL: --prove without --source requires EXPLORATION=true")
-            exit(1)
+        # --prove without --source: EXPLORATION=true runs the chunked pipeline; EXPLORATION=false
+        # runs the unchunked strategy-parallel mode below.
 
         # Set permissions
 
@@ -1355,6 +1366,19 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         state = _load_bandit_state(state_path)
 
         current_sigs = _chunk_body_signatures(Path.cwd(), project_path)
+        if not current_sigs:
+            try:
+                has_any_sorry = any(
+                    re.search(r"\bsorry\b", _strip_lean_comments(p.read_text()))
+                    for p in project_path.rglob("*.lean")
+                )
+            except Exception:
+                has_any_sorry = False
+            if has_any_sorry:
+                logging.warning(
+                    "[escalation] no chunk signatures resolved (lean_declaration/dag.json both empty) "
+                    "but project tree contains `sorry` — stagnation tracker is blind, escalation will not fire"
+                )
         _resolve_escalation_outcomes(state, current_sigs)
         _update_stagnation(state, current_sigs)
 
@@ -1542,6 +1566,129 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info("Lean LSP warmup completed.")
     except Exception as e:
         logging.warning(f"Lean LSP warmup failed (non-fatal): {e}")
+
+    # ── Path 3: prove mode, no source, EXPLORATION=false ─────────────────────
+    # Strategy-parallel mode: formalization orchestrator brainstorms strategies,
+    # spawns ≤K subagents (one per strategy, each in its own worktree), uses forum
+    # for coordination, merges winning proofs into main. Critic checks sorry-free +
+    # metaprogramming-free. Loop until COMPLETE or max iterations.
+    if prove and source is None and not exploration:
+
+        iteration = 0
+        while True:
+            # Formalization phase
+            _console.rule(f"[bold blue]Strategy Formalization Phase[/bold blue] (iteration {iteration})")
+            _assert_lsp_alive("strategy-formalization")
+            while True:
+                try:
+                    with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/STRATEGY.md", "r") as f:
+                        FORMALIZATION_PROMPT = with_library(f.read())
+                    with open(ACTIVE_SUBAGENTS_DIR / "EXPLORATION/EXPLORER.md", "r") as f:
+                        EXPLORER_SUBAGENT = f.read()
+
+                    formalization_prompt = (
+                        f"Iteration {iteration}: fill outstanding `sorry`s in the Lean project at {project_path}. "
+                        f"Brainstorm proof strategies, decide how many parallel attempts to spawn, create worktrees, "
+                        f"dispatch subagents, coordinate via forum, and merge winning proofs into the main branch. "
+                        f"PROJECT_PATH: {project_path}"
+                    )
+                    if iteration > 0:
+                        formalization_prompt += " REPORT.md contains the critic's feedback from the previous iteration; address the unresolved items listed there."
+
+                    async for message in query(
+                        prompt=formalization_prompt,
+                        options=ClaudeAgentOptions(
+                            tools=_ALL_TOOLS,
+                            allowed_tools=_ALL_TOOLS,
+                            agents={
+                                "explorer": AgentDefinition(
+                                    description="Explorer subagent. Searches Mathlib and the web for relevant lemmas, definitions, references.",
+                                    prompt=EXPLORER_SUBAGENT,
+                                    tools=_ALL_TOOLS,
+                                ),
+                            },
+                            system_prompt=FORMALIZATION_PROMPT,
+                            mcp_servers=LEAN_MCP_SERVER,
+                            hooks=FORUM_HOOKS,
+                            permission_mode=PERMISSIONS,
+                            max_budget_usd=formalization_budget,
+                            enable_file_checkpointing=True,
+                            env=_primary_env,
+                        ),
+                    ):
+                        _log_agent_message(message)
+
+                    logging.info("Strategy formalization phase completed successfully!")
+                    _commit_phase("strategy-formalization", {"iteration": iteration})
+                    break
+                except Exception as e:
+                    await _invoke_resolver("strategy-formalization", e)
+
+            # Critic phase: sorry-free + metaprogramming-free check
+            _console.rule(f"[bold blue]Strategy Critic Phase[/bold blue] (iteration {iteration})")
+            _assert_lsp_alive("strategy-critic")
+            while True:
+                try:
+                    with open(ACTIVE_PROMPTS_DIR / "CRITIC_STRATEGY.md", "r") as f:
+                        CRITIC_PROMPT = with_library(f.read())
+
+                    async for message in query(
+                        prompt=(
+                            f"Audit the Lean project at {project_path}: confirm zero `sorry` and zero metaprogramming "
+                            f"escape hatches in the main branch. Write REPORT.md with status COMPLETE or NEEDS_REVISION. "
+                            f"PROJECT_PATH: {project_path}"
+                        ),
+                        options=ClaudeAgentOptions(
+                            tools=_ALL_TOOLS,
+                            allowed_tools=_ALL_TOOLS,
+                            agents={},
+                            system_prompt=CRITIC_PROMPT,
+                            mcp_servers=LEAN_MCP_SERVER,
+                            hooks=FORUM_HOOKS,
+                            permission_mode=PERMISSIONS,
+                            max_budget_usd=critic_budget,
+                            enable_file_checkpointing=True,
+                            env=_primary_env,
+                        ),
+                    ):
+                        _log_agent_message(message)
+
+                    logging.info("Strategy critic phase completed successfully!")
+                    _commit_phase("strategy-critic", {"iteration": iteration})
+                    break
+                except Exception as e:
+                    await _invoke_resolver("strategy-critic", e)
+
+            # Loop status
+            try:
+                report_text = _read_report_md()
+                if re.search(r"\*\*Status:\*\*\s+COMPLETE", report_text, re.IGNORECASE):
+                    logging.info("Critic declared formalization complete.")
+                    break
+                elif max_critic_iterations is not None and iteration + 1 >= max_critic_iterations:
+                    logging.warning(f"Reached maximum iterations ({max_critic_iterations}) — stopping loop.")
+                    break
+                else:
+                    iteration += 1
+                    logging.info(f"Critic requested revision — starting iteration {iteration + 1}...")
+            except FileNotFoundError:
+                logging.warning("No REPORT.md found after critic phase — stopping loop.")
+                break
+
+        # Cleanup worktrees the orchestrator created
+        wt_root = project_path / ".worktrees"
+        if wt_root.exists():
+            for wt in sorted(wt_root.iterdir()):
+                if not wt.is_dir():
+                    continue
+                try:
+                    _cleanup_worktree(wt, project_path, wt.name)
+                except Exception as cleanup_err:
+                    logging.warning(f"Cleanup failed for {wt.name}: {cleanup_err}")
+        _delete_worktrees_manifest()
+
+        logging.info("Unity has completed!")
+        return 0
 
     # ── Path 2: prove mode, no source ─────────────────────────────────────────
     # Flow: exploration → generation → semiformalization (TT) → preparation → loop
@@ -1858,6 +2005,12 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     _delete_worktrees_manifest()
                     await _invoke_resolver("formalization", e)
 
+            # Surface illegitimate sorries (incl. helper-lemma cascades) so the critic can react this iteration
+            try:
+                _audit_illegitimate_sorries(Path.cwd(), project_path)
+            except Exception as e:
+                logging.error(f"ERROR (illegitimate-sorry audit): {e}")
+
             # Critic phase (always T variant)
             _console.rule("[bold blue]Critic Phase[/bold blue]")
             _assert_lsp_alive("critic")
@@ -1985,11 +2138,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             except FileNotFoundError:
                 logging.warning("No REPORT.md found after critic phase — stopping loop.")
                 break
-
-        try:
-            _audit_illegitimate_sorries(Path.cwd(), project_path)
-        except Exception as e:
-            logging.error(f"ERROR (illegitimate-sorry audit): {e}")
 
         _console.rule("[bold blue]Summary[/bold blue]")
         try:
@@ -2771,6 +2919,12 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             logging.critical("CRITICAL (formalization phase): reached unreachable code")
             exit(1)
 
+        # Surface illegitimate sorries (incl. helper-lemma cascades) so the critic can react this iteration
+        try:
+            _audit_illegitimate_sorries(Path.cwd(), project_path)
+        except Exception as e:
+            logging.error(f"ERROR (illegitimate-sorry audit): {e}")
+
         # Critic phase
 
         _console.rule("[bold blue]Critic Phase[/bold blue]")
@@ -2968,11 +3122,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         except FileNotFoundError:
             logging.warning("No REPORT.md found after critic phase — stopping loop.")
             break
-
-    try:
-        _audit_illegitimate_sorries(Path.cwd(), project_path)
-    except Exception as e:
-        logging.error(f"ERROR (illegitimate-sorry audit): {e}")
 
     # Cleanup
 
