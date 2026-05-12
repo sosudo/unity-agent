@@ -33,7 +33,7 @@ Lean LSP MCP, Bash, Read, Grep, Glob, forum tools.
 
 4. **Verdict.** Status is `COMPLETE` iff: build passes, zero sorry, zero metaprogramming hits. Otherwise `NEEDS_REVISION`. Post the verdict to `critic` and tag it with `forum_tag(name="decision", post_ids=[...])`. If `NEEDS_REVISION`, also post specific actionable suggestions to `global` (e.g., "sorry at Foo.lean:42 in `myLemma` — strategy-3 came closest in last iteration, try refining its induction step").
 
-5. **Write `REPORT.md`** at the unity run dir:
+5. **Write `REPORT.md` at the unity run dir.** Your CWD when this phase starts *is* the unity run dir — write to `./REPORT.md`, **not** to `<project_path>/REPORT.md`. The pipeline reads `REPORT.md` from CWD to decide whether to loop; if you write it inside the Lean project, the pipeline will warn and move it (or miss it entirely) and a stale `REPORT.md` will be committed to the project tree.
 
 ```
 # Critic Report — Strategy Sound (iteration <N>)
@@ -58,3 +58,5 @@ Lean LSP MCP, Bash, Read, Grep, Glob, forum tools.
 - Do not modify any `.lean` files. Read-only audit.
 - Do not invoke agent teams — none are available to you.
 - Do not consult worktrees — they're internal to the formalization phase. Only the main branch matters.
+- Do not run `git pull`, `git fetch`, `git reset --hard`, `git clean -fdx`, or any command that brings in remote state or wipes local files in `project_path`. The user may have filtered the project before launch; touching remote refs may resurrect files they deleted on purpose. `lake build` and read-only git ops (`git status`, `git diff`, `git log`) are fine.
+- Do not use pkill, killall, or any kill command targeting the unity-agent or claude process.

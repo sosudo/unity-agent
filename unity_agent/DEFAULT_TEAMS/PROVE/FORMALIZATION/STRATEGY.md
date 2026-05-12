@@ -28,7 +28,9 @@ You also have direct access to WebSearch, WebFetch, Lean LSP MCP (`lean_goal`, `
 
 2. **Brainstorm strategies.** Generate as many *distinct* proof angles as you can — different from each other, not minor variations. Examples (illustrative; tailor to the goal): direct mathlib lemma application, induction on a specific variable, case analysis / decision procedure (`decide`, `omega`, `aesop`), term-mode construction, rewriting via a simp set, reducing to a known special case. Use the `explorer` agent team or LSP tools to confirm the APIs each strategy relies on actually exist before committing. Post your strategy candidates to the `global` forum thread as you generate them so they're visible to downstream agent teams.
 
-3. **Decide how many agent teams to spawn.** Let `n` be the number of distinct strategies you brainstormed and `K = ceil(1.5 * n)`. You may spawn anywhere from `1` to `K` agent teams. If one strategy is clearly correct and you have high confidence, spawn fewer — even zero agent teams and do the proof yourself directly. Justify any choice below `K` in a forum post tagged with `forum_tag(name="decision", post_ids=[...])`.
+3. **Decide how many agent teams to spawn.** Let `n` be the number of distinct strategies you brainstormed and `K = ceil(1.5 * n)`. **Default: spawn agent teams.** Agent teams are the right tool for both *strategy exploration* (talking through ideas in the forum before committing) and *parallel execution* (one strategy per worktree). You are explicitly welcome to spawn agent teams purely to brainstorm and debate strategies in the forum — they do not have to be tied to a worktree-bound proof attempt. You should spawn execution agent teams whenever more than one strategy might plausibly work — pursue all of them in parallel rather than serializing.
+
+The *only* condition under which you may skip agent teams and write the proof directly is when you are fully confident in exactly one strategy — the goal is small enough and the API surface obvious enough that a single attempt will succeed. If you have any doubt, or if you can name two strategies either of which might work, spawn agent teams for each. Justify a sub-`K` choice in a forum post tagged with `forum_tag(name="decision", post_ids=[...])`; "I felt confident" is not sufficient justification if multiple strategies were on the table.
 
 4. **Create worktrees.** For each agent team you will spawn (with strategy ids `strategy-1`, `strategy-2`, …), from `project_path` run:
    ```
@@ -50,6 +52,41 @@ You also have direct access to WebSearch, WebFetch, Lean LSP MCP (`lean_goal`, `
 6. **Coordinate during execution.** Read forum threads continuously while agent teams work. If a agent team proposes a new strategy idea in `global`, evaluate it — if promising, spawn an additional agent team for it (with a new strategy id, new worktree). If a agent team reports being stuck, post suggestions or pivot it. The forum is a live discussion, not a passive log.
 
 7. **Merge winning proofs into main.** After all agent teams return, build each worktree (`cd <wt>; lake build`). For each target sorry, identify which worktree(s) resolved it (sorry absent from the declaration body and `lean_goal` clean). Pick a winner per sorry — prefer adjacent-sorry batching from the same worktree, then shorter proof body, then lowest strategy id. Post the winner table to `global`. `Edit` the main file in `project_path` to splice the winning proof for each sorry. Run `lake build` in `project_path`; if it passes, `git add -A && git commit -m "UNITY: merge strategies <ids>"`. If it fails, roll back and post the conflict to forum — the critic will flag NEEDS_REVISION and you'll retry next iteration.
+
+**Operational guardrails**
+
+**IMPORTANT: Do not use pkill, killall, or any kill command targeting the unity-agent or claude process. Do not attempt to kill the pipeline or any parent process.**
+
+**Filesystem scope (mandatory)**
+
+Restrict all filesystem operations to these roots:
+- The unity run dir (your CWD when unity started) and any subdirectory thereof
+- The Lean project dir (`project_path`) and any subdirectory, including `.worktrees/`
+- `~/.unity/library/` (read-only reference material listed in your Library block)
+- Tool-managed caches, read-only and only when a tool requires it: `~/.elan/`, `~/.cache/mathlib/`, `~/.lake/`, `~/.cache/uv/`
+
+Never scan, traverse, or glob outside these roots. On shared/NFS filesystems, wide scans hang for minutes or indefinitely and will stall the entire pipeline until a human kills the hung process.
+
+**Forbidden commands (not exhaustive — the spirit is "no scans outside the allowed roots"):**
+
+- `find /`, `find /data`, `find /home`, `find /tmp`, `find /var`, `find /usr`, `find /opt`, `find ~`, `find $HOME`, `find ..`, or any `find` whose starting path is not inside one of the allowed roots above
+- `find` with `-L` (follow symlinks) in any context where it could escape the allowed roots
+- Recursive `ls`: `ls -R /`, `ls -R /data`, `ls -R ~`, `ls -R ..`, or any `ls -R` above the allowed roots
+- Recursive grep/ripgrep: `grep -r /`, `grep -r /data`, `grep -r ~`, `rg /`, `rg /data`, `rg ~`, or any rooted outside the allowed roots
+- `du`, `tree`, `fd` / `fdfind` with a root outside the allowed roots
+- `locate`, `updatedb`, `mlocate`, `plocate`
+- Shell globs that escape the allowed roots: `/**`, `/data/**`, `~/**`, `../**`
+- `git ls-files` or `git grep` from a directory above the allowed roots
+
+**Git hygiene**
+
+- The Lean project at `project_path` is the ground-truth working tree. Do **not** run `git pull`, `git fetch`, `git reset --hard`, `git clean -fdx`, or any command that brings in remote state or wipes local files. The project was checked out and (often) filtered by the user before unity launched — touching remote refs may resurrect files the user deleted on purpose (e.g., other benchmark items).
+- Worktree creation (`git worktree add` inside `.worktrees/`) and commits inside a worktree are fine. Outside that, the only git ops you should run on the main worktree are `git status`, `git diff`, `git log`, `git add`, `git commit`.
+
+**If you do not know where a file is**, do not scan for it. Instead:
+1. Check the absolute paths given in your spawn prompt — the orchestrator supplies `project_path` explicitly.
+2. Ask via the forum and wait for a reply.
+3. Fail loudly with a clear error message and return.
 
 **Constraints**
 
