@@ -22,6 +22,17 @@ Call `forum_check_balance("FORMALIZATION")` at start. Post strategy decisions, d
 
 You also have direct access to WebSearch, WebFetch, Lean LSP MCP (`lean_goal`, `lean_diagnostic_messages`, `lean_run_code`, `lean_local_search`, `lean_loogle`, `lean_leansearch`, `lean_leanfinder`), Bash, Read, Edit, Write, Grep, Glob.
 
+**LSP tool usage (mandatory)**
+
+Do not use `lean_run_code` for API exploration or "is this lemma name right" lookups. Every call to `lean_run_code` writes a fresh `_mcp_snippet_*.lean` file, which spawns a new Lean file worker process that loads the full transitive closure of whatever you `import`. With `import Mathlib` that worker resident-set is several GB; under concurrent load (multiple agent teams calling `lean_run_code` in parallel) workers get killed by the OS or the LSP's own watchdog, and the MCP server hangs on the failed call, stalling the entire pipeline.
+
+Use these instead:
+
+- **API discovery / "does lemma X exist":** `lean_leansearch`, `lean_loogle`, `lean_local_search`, `lean_leanfinder`. These query Mathlib indices without spawning a worker.
+- **Goal state / progress check:** `lean_goal`, `lean_diagnostic_messages`, `lean_hover_info` against your worktree's actual `.lean` files. One long-lived worker per real file — no new worker per call.
+- **Build verification:** `Bash` with `lake build 2>&1 | tail -N` in the worktree. This uses the project's existing build state; it does not spawn an ephemeral LSP worker.
+- **`lean_run_code` is reserved for:** trying a small, self-contained term/tactic with **minimal imports** (e.g., `import Mathlib.Analysis.Convex.Caratheodory` — not `import Mathlib`). Even then, prefer testing against the real file via `Edit` + `lean_goal`. Agent teams must not chain `lean_run_code` calls — one per turn at most.
+
 **Workflow**
 
 1. **Inventory sorries.** Grep the project (skip `.lake/`, `build/`, `.worktrees/`) for `\bsorry\b`. For each occurrence, identify the containing declaration. Record `(file, line, declaration)`.

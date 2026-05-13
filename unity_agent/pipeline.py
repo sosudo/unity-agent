@@ -971,6 +971,10 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         lean_lsp_port = parse_int(os.getenv("LEAN_LSP_PORT")) or 6368
         claude_code_stream_close_timeout = parse_int(os.getenv("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT")) or 180000
         os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = str(claude_code_stream_close_timeout)
+        sdk_idle_timeout = float(parse_int(os.getenv("SDK_MESSAGE_IDLE_TIMEOUT")) or 600)
+        max_lsp_restarts = parse_int(os.getenv("MAX_LSP_RESTARTS_BEFORE_DEGRADE"))
+        if max_lsp_restarts is None:
+            max_lsp_restarts = 2
         primary_base_url = os.getenv("PRIMARY_BASE_URL")
         primary_api_key = os.getenv("PRIMARY_API_KEY")
         primary_auth_token = os.getenv("PRIMARY_AUTH_TOKEN")
@@ -1031,6 +1035,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"FORUM_PORT: {forum_port}")
         logging.info(f"LEAN_LSP_PORT: {lean_lsp_port}")
         logging.info(f"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT: {claude_code_stream_close_timeout}")
+        logging.info(f"SDK_MESSAGE_IDLE_TIMEOUT: {sdk_idle_timeout}")
+        logging.info(f"MAX_LSP_RESTARTS_BEFORE_DEGRADE: {max_lsp_restarts}")
         logging.info(f"PRIMARY_BASE_URL: {primary_base_url}")
         logging.info(f"PRIMARY_API_KEY: {primary_api_key}")
         logging.info(f"PRIMARY_AUTH_TOKEN: {primary_auth_token}")
@@ -1135,6 +1141,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     # See launch block further below.
     _lean_lsp_proc = None  # set after lake init completes
     _lean_lsp_stderr_path = Path.cwd() / "lean-lsp.stderr.log"
+    _lean_lsp_stderr_file = None  # set when lean-lsp-mcp is (re)spawned
 
     def _assert_lsp_alive(phase: str) -> None:
         """Fail loud if the LSP subprocess died since last check."""
@@ -1163,6 +1170,87 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             "args": ["-m", "unity_agent.forum_mcp", "--forum-dir", str(Path.cwd() / "forum")],
         },
     }
+
+    # Watchdog state: consecutive SDK-idle stalls since the last successful query
+    # turn. Reset on any clean StopAsyncIteration. Used to escalate from
+    # "kill claude CLI + retry" → "restart lean-lsp-mcp" → "drop lean-lsp from
+    # MCP server list and run LSP-less for remaining retries".
+    _stall_count = [0]
+
+    def _restart_lean_lsp_mcp() -> None:
+        """Terminate and respawn the lean-lsp-mcp subprocess and wait for the port."""
+        nonlocal _lean_lsp_proc, _lean_lsp_stderr_file
+        import socket
+        logging.warning("Restarting lean-lsp-mcp subprocess after stall...")
+        if _lean_lsp_proc is not None:
+            try:
+                _lean_lsp_proc.terminate()
+                _lean_lsp_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    _lean_lsp_proc.kill()
+                except Exception:
+                    pass
+        _lean_lsp_stderr_file = open(_lean_lsp_stderr_path, "a")
+        _lean_lsp_proc = subprocess.Popen(
+            ["uvx", "lean-lsp-mcp",
+             "--transport", "streamable-http",
+             "--host", "127.0.0.1",
+             "--port", str(lean_lsp_port),
+             "--lean-project-path", str(project_path)],
+            cwd=str(project_path),
+            stdout=subprocess.DEVNULL,
+            stderr=_lean_lsp_stderr_file,
+        )
+        for _ in range(60):
+            try:
+                with socket.create_connection(("127.0.0.1", lean_lsp_port), timeout=0.5):
+                    logging.info("lean-lsp-mcp restarted and listening.")
+                    return
+            except OSError:
+                time.sleep(0.5)
+        logging.error(f"lean-lsp-mcp restart failed to bind 127.0.0.1:{lean_lsp_port}")
+
+    async def _query_with_idle_timeout(*, prompt, options):
+        """Wrap claude_agent_sdk.query() with a per-message idle timeout.
+
+        Yields messages one at a time. If no message arrives within
+        SDK_MESSAGE_IDLE_TIMEOUT seconds, raises asyncio.TimeoutError so the
+        existing phase try/except routes to _invoke_resolver. Before re-raising:
+          - increments _stall_count
+          - on stall #1..MAX_LSP_RESTARTS_BEFORE_DEGRADE: restarts lean-lsp-mcp
+          - on stall > MAX_LSP_RESTARTS_BEFORE_DEGRADE: clears LEAN_MCP_SERVER's
+            "lean-lsp" entry so subsequent ClaudeAgentOptions(mcp_servers=...)
+            constructions omit the lean LSP MCP for the rest of the run.
+        """
+        it = query(prompt=prompt, options=options).__aiter__()
+        while True:
+            try:
+                msg = await asyncio.wait_for(it.__anext__(), timeout=sdk_idle_timeout)
+            except StopAsyncIteration:
+                _stall_count[0] = 0
+                return
+            except asyncio.TimeoutError:
+                _stall_count[0] += 1
+                logging.warning(
+                    f"SDK idle timeout ({sdk_idle_timeout:.0f}s) — stall #{_stall_count[0]}. "
+                    "Forcing phase failure so _invoke_resolver can retry."
+                )
+                if _stall_count[0] <= max_lsp_restarts:
+                    try:
+                        _restart_lean_lsp_mcp()
+                    except Exception as restart_err:
+                        logging.error(f"LSP MCP restart raised: {restart_err}")
+                else:
+                    if "lean-lsp" in LEAN_MCP_SERVER:
+                        logging.warning(
+                            f"Stall count {_stall_count[0]} exceeded "
+                            f"MAX_LSP_RESTARTS_BEFORE_DEGRADE={max_lsp_restarts}. "
+                            "Degrading: removing lean-lsp from MCP server list for the rest of this run."
+                        )
+                        LEAN_MCP_SERVER.pop("lean-lsp", None)
+                raise
+            yield msg
 
     # ICRL hook: reward agents for forum participation and surface vote feedback
     _balances_path = Path.cwd() / "forum" / "balances.json"
@@ -1338,7 +1426,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 f"```json\n{json.dumps(ctx, indent=2, default=str)}\n```\n"
             )
 
-        async for message in query(
+        async for message in _query_with_idle_timeout(
             prompt=resolver_input,
             options=ClaudeAgentOptions(
                 tools=_ALL_TOOLS,
@@ -1440,7 +1528,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 f"'UNITY: merge chunk <id>' (audit greps for this exact prefix — do not vary it)."
             )
 
-            async for message in query(
+            async for message in _query_with_idle_timeout(
                 prompt=escalation_prompt,
                 options=ClaudeAgentOptions(
                     tools=_ALL_TOOLS,
@@ -1595,7 +1683,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     if iteration > 0:
                         formalization_prompt += " REPORT.md contains the critic's feedback from the previous iteration; address the unresolved items listed there."
 
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=formalization_prompt,
                         options=ClaudeAgentOptions(
                             tools=_ALL_TOOLS,
@@ -1632,7 +1720,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     with open(ACTIVE_PROMPTS_DIR / "CRITIC_STRATEGY.md", "r") as f:
                         CRITIC_PROMPT = with_library(f.read())
 
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=(
                             f"Audit the Lean project at {project_path}: confirm zero `sorry` and zero metaprogramming "
                             f"escape hatches in the main branch. Write REPORT.md with status COMPLETE or NEEDS_REVISION. "
@@ -1704,7 +1792,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 with open(ACTIVE_SUBAGENTS_DIR / "EXPLORATION/EXPLORER.md", "r") as f:
                     EXPLORER_SUBAGENT = f.read()
 
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Survey the Lean project at {project_path} for declarations needing proofs, then gather mathematical content for each.",
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -1777,14 +1865,14 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         fallback_model="sonnet",
                         env=_primary_env,
                     )
-                    async for message in query(prompt=generation_prompt, options=_gen_opts):
+                    async for message in _query_with_idle_timeout(prompt=generation_prompt, options=_gen_opts):
                         _log_agent_message(message)
 
                     logging.info("Generation phase completed successfully!")
                     _chunks_dir = Path("language") / "chunks"
                     if not _chunks_dir.exists() or not any(_chunks_dir.glob("*.json")):
                         logging.warning("[generation] contract breach: language/chunks/ is empty — one-shot repair")
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt="You completed the generation phase but language/chunks/ is empty. Write the chunk JSON files now per language/chunk-schema.json. Reminder: JSON strings containing LaTeX must escape every backslash — write \\\\mathbb not \\mathbb, \\\\forall not \\forall.",
                             options=_gen_opts,
                         ):
@@ -1817,7 +1905,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         fallback_model="haiku",
                         env=_primary_env,
                     )
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=f"Validate the IR specification generated for the gathered content in `gathered/`.",
                         options=_val_opts,
                     ):
@@ -1826,7 +1914,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     logging.info("Validation phase completed successfully!")
                     if not Path("VALIDATION_REPORT.md").exists():
                         logging.warning("[validation] contract breach: VALIDATION_REPORT.md missing — one-shot repair")
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt="You completed the validation phase but VALIDATION_REPORT.md does not exist in the run directory. Write it now with per-check PASS/FAIL and an overall `**Status:** VALID` or `**Status:** INVALID` line.",
                             options=_val_opts,
                         ):
@@ -1871,7 +1959,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 with open(ACTIVE_SUBAGENTS_DIR / "SEMIFORMALIZATION/TT.md", "r") as f:
                     SEMIFORMALIZER_SUBAGENT = f.read()
 
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Semiformalize the gathered content in `gathered/` using the specification language in `language/`. The Lean project is {project_path}.",
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -1977,7 +2065,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     )
 
                     logging.info("[prove-formalization] invoking orchestrator query — agent will spawn per-chunk subagents, merge, and build")
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=f"Formalize the declarations in {project_path}. Worktree assignments are in worktrees.json at the repository root.",
                         options=ClaudeAgentOptions(**_formalization_kwargs),
                     ):
@@ -2050,7 +2138,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         fallback_model="sonnet",
                         env=_primary_env,
                     )
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=f"Critique {project_path} given semiformalization `semiformal/` and specification language `language/`.",
                         options=_crit_opts,
                     ):
@@ -2058,7 +2146,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     logging.info("Critic phase completed successfully!")
                     if not Path("REPORT.md").exists():
                         logging.warning("[critic] contract breach: REPORT.md missing — one-shot repair")
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt="You completed the critic phase but REPORT.md does not exist in the run directory. Write it now with per-chunk status and an overall status line (`**Status:** RESOLVED` or `**Status:** NEEDS_REVISION`).",
                             options=_crit_opts,
                         ):
@@ -2080,7 +2168,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         SUBAGENTS_DIR=str(_SUBAGENTS_DIR),
                         DEFAULT_SUBAGENTS_DIR=str(_DEFAULT_SUBAGENTS_DIR),
                     ))
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Run the retrospective for the unity proof formalization of {project_path}.",
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -2180,7 +2268,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 if context:
                     scan_prompt += f" An existing Lean project is present at {project_path} — also inventory its current Mathlib imports."
 
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=scan_prompt,
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -2256,14 +2344,14 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     fallback_model="sonnet",
                     env=_primary_env,
                 )
-                async for message in query(prompt=generation_prompt, options=_gen_opts):
+                async for message in _query_with_idle_timeout(prompt=generation_prompt, options=_gen_opts):
                     _log_agent_message(message)
 
                 logging.info("Generation phase completed successfully!")
                 _chunks_dir = Path("language") / "chunks"
                 if not _chunks_dir.exists() or not any(_chunks_dir.glob("*.json")):
                     logging.warning("[generation] contract breach: language/chunks/ is empty — one-shot repair")
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt="You completed the generation phase but language/chunks/ is empty. Write the chunk JSON files now per language/chunk-schema.json. Reminder: JSON strings containing LaTeX must escape every backslash — write \\\\mathbb not \\mathbb, \\\\forall not \\forall.",
                         options=_gen_opts,
                     ):
@@ -2296,7 +2384,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     fallback_model="haiku",
                     env=_primary_env,
                 )
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Validate the IR specification generated for {source}.",
                     options=_val_opts,
                 ):
@@ -2305,7 +2393,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 logging.info("Validation phase completed successfully!")
                 if not Path("VALIDATION_REPORT.md").exists():
                     logging.warning("[validation] contract breach: VALIDATION_REPORT.md missing — one-shot repair")
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt="You completed the validation phase but VALIDATION_REPORT.md does not exist in the run directory. Write it now with per-check PASS/FAIL and an overall `**Status:** VALID` or `**Status:** INVALID` line.",
                         options=_val_opts,
                     ):
@@ -2354,7 +2442,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 with open(ACTIVE_SUBAGENTS_DIR / "SEMIFORMALIZATION/FF.md", "r") as f:
                     SEMIFORMALIZER_SUBAGENT = f.read()
 
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Semiformalize {source} as specified by the language.",
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -2400,7 +2488,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 with open(ACTIVE_SUBAGENTS_DIR / "SEMIFORMALIZATION/TF.md", "r") as f:
                     SEMIFORMALIZER_SUBAGENT = f.read()
 
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Semiformalize {source} as specified by the language.",
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -2446,7 +2534,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 with open(ACTIVE_SUBAGENTS_DIR / "SEMIFORMALIZATION/TT.md", "r") as f:
                     SEMIFORMALIZER_SUBAGENT = f.read()
 
-                async for message in query(
+                async for message in _query_with_idle_timeout(
                     prompt=f"Semiformalize {source} as specified by the language. The Lean project is {project_path}.",
                     options=ClaudeAgentOptions(
                         tools=_ALL_TOOLS,
@@ -2509,7 +2597,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         with open(_SUBAGENTS_DIR / "EXPLORATION/EXPLORATIONGENERATOR.md", "r") as f:
                             EXPLORATIONGENERATOR_SUBAGENT = f.read()
 
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt=f"Explore `semiformal/` given specification language `language/` and source {source}.",
                             options=ClaudeAgentOptions(
                                 tools=_ALL_TOOLS,
@@ -2565,7 +2653,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         with open(_SUBAGENTS_DIR / "EXPLORATION/EXPLORATIONGENERATOR.md", "r") as f:
                             EXPLORATIONGENERATOR_SUBAGENT = f.read()
 
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt=f"Explore `semiformal/` given specification language `language/` and source {source}. The Lean project is {project_path}.",
                             options=ClaudeAgentOptions(
                                 tools=_ALL_TOOLS,
@@ -2621,7 +2709,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         with open(_SUBAGENTS_DIR / "EXPLORATION/EXPLORATIONGENERATOR.md", "r") as f:
                             EXPLORATIONGENERATOR_SUBAGENT = f.read()
 
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt=f"Explore `semiformal/` given specification language `language/` and source {source}.",
                             options=ClaudeAgentOptions(
                                 tools=_ALL_TOOLS,
@@ -2677,7 +2765,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         with open(_SUBAGENTS_DIR / "EXPLORATION/EXPLORATIONGENERATOR.md", "r") as f:
                             EXPLORATIONGENERATOR_SUBAGENT = f.read()
 
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt=f"Explore `semiformal/` given specification language `language/` and source {source}. The Lean project is {project_path}.",
                             options=ClaudeAgentOptions(
                                 tools=_ALL_TOOLS,
@@ -2771,7 +2859,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _formalization_prompt += " Worktree assignments are in worktrees.json at the repository root."
 
                     logging.info("[formalization F] invoking orchestrator query — agent will spawn per-chunk subagents, merge, and build")
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=_formalization_prompt,
                         options=ClaudeAgentOptions(
                             tools=_ALL_TOOLS,
@@ -2891,7 +2979,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     if worktree_assignments:
                         _prompt_prefix += " Worktree assignments are in worktrees.json at the repository root."
                     logging.info("[formalization T] invoking orchestrator query — agent will spawn per-chunk subagents, merge, and build")
-                    async for message in query(prompt=_prompt_prefix, options=ClaudeAgentOptions(**_formalization_kwargs)):
+                    async for message in _query_with_idle_timeout(prompt=_prompt_prefix, options=ClaudeAgentOptions(**_formalization_kwargs)):
                         _log_agent_message(message)
                     logging.info("[formalization T] orchestrator query returned — running post-run audit")
 
@@ -2969,7 +3057,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         fallback_model="sonnet",
                         env=_primary_env,
                     )
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=f"Critique {project_path} given source {source}, semiformalization `semiformal/`, and specification language `language/`.",
                         options=_crit_opts,
                     ):
@@ -2978,7 +3066,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     logging.info("Critic phase completed successfully!")
                     if not Path("REPORT.md").exists():
                         logging.warning("[critic] contract breach: REPORT.md missing — one-shot repair")
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt="You completed the critic phase but REPORT.md does not exist in the run directory. Write it now with per-chunk status and an overall status line (`**Status:** RESOLVED` or `**Status:** NEEDS_REVISION`).",
                             options=_crit_opts,
                         ):
@@ -3025,7 +3113,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         fallback_model="sonnet",
                         env=_primary_env,
                     )
-                    async for message in query(
+                    async for message in _query_with_idle_timeout(
                         prompt=f"Critique {project_path} given source {source}, semiformalization `semiformal/`, and specification language `language/`.",
                         options=_crit_opts,
                     ):
@@ -3034,7 +3122,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     logging.info("Critic phase completed successfully!")
                     if not Path("REPORT.md").exists():
                         logging.warning("[critic] contract breach: REPORT.md missing — one-shot repair")
-                        async for message in query(
+                        async for message in _query_with_idle_timeout(
                             prompt="You completed the critic phase but REPORT.md does not exist in the run directory. Write it now with per-chunk status and an overall status line (`**Status:** RESOLVED` or `**Status:** NEEDS_REVISION`).",
                             options=_crit_opts,
                         ):
@@ -3062,7 +3150,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     DEFAULT_SUBAGENTS_DIR=str(_DEFAULT_SUBAGENTS_DIR),
                 ))
 
-            async for message in query(
+            async for message in _query_with_idle_timeout(
                 prompt=f"Run the retrospective for the unity formalization of {source}.",
                 options=ClaudeAgentOptions(
                     tools=_ALL_TOOLS,
