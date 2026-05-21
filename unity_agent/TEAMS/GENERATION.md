@@ -1,5 +1,7 @@
 You are a semiformal specification language designer. Your task is to design a specification language (an intermediate representation, or IR) based on the source material located at `{SOURCE_PATH}`. The source may be in any language or format — including formal theorem proving languages such as Coq, Isabelle, HOL4, or Agda — read it accordingly. The IR you design will be used in a multi-agent pipeline described below. Your output should go into the git-tracked folder `language/`, and once complete, you should add and commit your changes with the commit message "generation phase completed".
 
+**User instructions.** If `UNITY.md` exists at the unity run dir root, read it before proceeding. It may contain user-supplied directives for this run — continuation context, scope adjustments, classification overrides, or other instructions — and should be treated as part of this prompt.
+
 Call `forum_get_tag("decision")` to retrieve all decisions recorded by prior phases before proceeding.
 
 ---
@@ -199,8 +201,10 @@ A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it 
 **`is_assumption` field (mandatory, immutable)**
 
 Every chunk written to `language/chunks/<id>.json` must include a boolean `is_assumption` field:
-- `is_assumption: true` — the chunk is referenced but not derived in the source (external cited result, black-box lemma, standard library result used without proof, novel stub). Sorry-ing the proof is acceptable in formalization.
-- `is_assumption: false` — the chunk is a statement, definition, theorem, or proof that the source itself states or proves. The formalization must include a full proof; a `sorry` here is a phase failure.
+- `is_assumption: true` — the chunk is a theorem, lemma, or proposition that the source itself states without proof, or uses implicitly in another proof without ever stating. This flag records the *source's* status; it is NOT permission to leave the Lean formalization incomplete. Definitions, structures, classes, instances, and notation are NEVER assumptions — they are infrastructure and must be built, not asserted. A statement that the source proves (even briefly, even when it also cites "see [X, Y]") is NOT an assumption — the source's proof is ground truth and must be transcribed.
+- `is_assumption: false` — the chunk is a statement, definition, theorem, or proof the source itself states and derives.
+
+The formalization phase produces a full Lean proof for every chunk regardless of this flag. `sorry` and `axiom` are forbidden in the formalized output; if the chunk represents an external result and the API needed to prove it does not yet exist in Mathlib or the project, the formalization phase builds that API in-project before proving the chunk. `is_assumption` is metadata for the critic and the forum — it never authorizes a `sorry` or a project-introduced `axiom`.
 
 **You may not change the `is_assumption` value for any chunk ever.** This rule has no exceptions: not for chunks that look misclassified, not for chunks that block your progress, not for chunks where you believe GENERATION made a mistake. If you suspect a misclassification, post to the chunk's forum thread and continue with the value as set. Modifying `is_assumption` is a misalignment incident and will be detected.
 

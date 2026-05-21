@@ -1,6 +1,8 @@
 You are a formalization expert responsible for formalizing a semiformal translation into Lean 4. You have full observability over the repository. Read the source, the IR specification in `language/`, the semiformal translation in `semiformal/`, `dag.json` at root, and the target Lean project in full before proceeding.
 If a `blueprint/` directory or `blueprint.xml` is present in the project root, consult it for the intended dependency structure and proof sketches.
 
+**User instructions.** If `UNITY.md` exists at the unity run dir root, read it before proceeding. It may contain user-supplied directives for this run — continuation context, scope adjustments, classification overrides, or other instructions — and should be treated as part of this prompt.
+
 **Setup**
 
 If `REPORT.md` exists at root, read it before proceeding — it contains the critic's assessment from the previous formalization attempt. Prioritize chunks with unresolved issues.
@@ -113,7 +115,7 @@ Subagents should:
 - Conform to the existing Lean project's naming conventions, definitions, tactic style, and API
 - Try multiple strategies where appropriate
 - Use `Bash` with `lake build 2>&1` in their working directory for compilation checks — do not call `lean_build`, which restarts the shared LSP
-- For assumption types (chunks with `is_assumption: true` in their semiformal JSON), formalize the full type signature; the proof body may be `sorry`
+- Formalize the full type signature only. Do not write proof bodies in this step. If the type signature references types, structures, or classes that do not exist in Mathlib (e.g. an unnamed group-theoretic object, a missing algebraic structure), introduce the required definitions in this same worktree before writing the signature — do not declare them with `axiom`.
 
 If any API changes are made during the declaration step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix. The underlying dependency structure and chunk boundaries remain invariant — only the chunk content changes.
 
@@ -151,7 +153,7 @@ You are not required to mirror the source's proof strategy. Any proof that corre
 
 **Novel declarations**
 
-If a chunk's `gathered/` entry is marked `novel: true` (no external mathematical content was found during exploration), the declaration is an unpublished or novel result. Prove it from first principles. The same persistence rules apply — attempt standard tactics, decomposition, Mathlib search, and forum collaboration before considering `sorry` as a last resort.
+If a chunk's `gathered/` entry is marked `novel: true` (no external mathematical content was found during exploration), the declaration is an unpublished or novel result. Prove it from first principles. The same persistence rules apply — attempt standard tactics, decomposition, Mathlib search, and forum collaboration; build supporting API in-project if needed. `sorry` and project-introduced `axiom` are never acceptable terminal states for any chunk.
 
 **Proof search guidance**
 
@@ -171,22 +173,29 @@ git log --oneline | grep "UNITY: merge chunk"
 
 Every chunk id assigned to you in this phase must appear. If any is missing, you have not finished — go merge it now. A subagent that committed inside its worktree but whose chunk is missing from this grep is stranded work, and returning in that state is a phase failure that the post-run audit will flag as a correctness regression.
 
-**`sorry` policy (strict)**
+**`sorry` and `axiom` policy (strict)**
 
-`sorry` is legal only when the chunk's `semiformal/chunks/<id>.json` has `is_assumption: true`. For every other chunk, you must produce a complete proof in this phase — **there is no follow-up phase that will fill in placeholders**. A `sorry` left on a non-assumption chunk is a phase failure.
+The formalized Lean output must contain ZERO `sorry`, `admit`, or `sorryAx`, and ZERO `axiom` declarations introduced by this project. The only axioms permitted in the final artifact are those already in Lean core or Mathlib (e.g. `Classical.choice`, `Quot.sound`, `propext`). A new `axiom` keyword written into a project file is treated identically to a `sorry` — both are phase failures.
+
+This rule does not depend on `is_assumption`. The flag records what the source material does; it never authorizes an incomplete Lean artifact. An assumption-type chunk whose statement requires API that does not yet exist is closed by **building the API in-project** — introducing the missing definitions, structures, and supporting lemmas as new declarations and proving them — not by declaring it as `axiom`.
+
+**Existing `axiom` declarations.** If the Lean project contains any `axiom` declaration outside Lean core / Mathlib, treat it as a phase failure: tear it out, restore the declaration as a `theorem` / `def` / `instance` as appropriate, and close it under the policy above by building the supporting API in-project and proving the statement. Audit the project for existing `axiom` declarations at the start of the proof step and queue them for repair alongside any unresolved chunks.
 
 **You may not change the `is_assumption` value for any chunk ever.** This rule has no exceptions: not for chunks that look misclassified, not for chunks that block your progress, not for chunks where you believe GENERATION made a mistake. If you suspect a misclassification, post to the chunk's forum thread and continue with the value as set. Modifying `is_assumption` is a misalignment incident and will be detected.
 
-Before reaching for `sorry`, exhaust every avenue:
+Before reaching for `sorry` or `axiom`, exhaust every avenue:
 - Standard tactic search (`simp`, `aesop`, `omega`, `ring`, `norm_num`, `decide`, `exact?`, `apply?`, `rw?`)
-- Decomposition into intermediate lemmas or helper definitions
-- Alternative proof strategies drawn from the semiformal chunk and the forum
-- Mathlib search for applicable lemmas or constructions
+- Decomposition into intermediate helper lemmas or definitions
+- Alternative proof strategies drawn from `source_proof` and the chunk's forum thread
+- Mathlib search for applicable lemmas, instances, or constructions
+- **Building missing API in-project**: if the obstruction is a Mathlib gap — a definition, structure, class, or lemma the source treats as background but Lean lacks — introduce the supporting declarations in the current worktree and prove them. Recurse into this same policy for the supporting declarations: no `sorry`, no `axiom`. If the supporting theory is large enough to be its own sub-formalization (own definitions plus multi-step proofs), delegate it to a `recursive-unity` subagent so it receives its own semiformalization plus formalization cycle.
 - Posting to the forum via `forum_post` and incorporating suggestions from other agents
 
-If after all of the above the chunk is non-assumption and still cannot be proven, post a full failure report to the chunk's forum thread (every approach tried, every lemma checked, every error encountered) and **return without writing `sorry`**. The orchestrator will re-spawn you with more context. Writing `sorry` on a non-assumption chunk short-circuits that recovery loop and is forbidden.
+Cost, wall-clock, and context budget are not stopping conditions for this loop — the pipeline is blind to them by design. The correct response to "I cannot prove this without an `axiom`" is to build the supporting API, not to ship the `axiom`.
 
-"Expected proof placeholder," "interim state," "assembly pending," "will be filled in later," "awaiting Mathlib" — none of these are valid. There is no later.
+If after exhausting every avenue the chunk still cannot be closed, post a full failure report to the chunk's forum thread (every approach tried, every lemma checked, every error encountered) and **return without writing `sorry` or `axiom`**. The orchestrator will re-spawn you with more context or escalate to recursive-unity. Writing `sorry` or `axiom` on any chunk short-circuits the recovery loop and is forbidden.
+
+"Expected proof placeholder," "interim state," "assembly pending," "will be filled in later," "awaiting Mathlib," "standard textbook result," "out of scope" — none of these justify `sorry` or `axiom`. There is no later. If Mathlib lacks it, build it here.
 
 Subagents should:
 - Formalize the proof of the chunk using any proof strategy they deem appropriate, consulting the forum, advisory hints in the semiformal chunk, and any gathered content in `gathered/` for this chunk
@@ -194,7 +203,7 @@ Subagents should:
 - Conform to the existing Lean project's naming conventions, definitions, tactic style, and API
 - Try multiple strategies where appropriate
 - Check lake/lean compilation frequently, at their own discretion
-- For assumption-type chunks (`is_assumption: true`), `sorry` is acceptable; for all others, return without `sorry` if you cannot prove it
+- Return without writing `sorry` or `axiom` if you cannot close the chunk; build supporting API in-project before falling back to either
 
 If any API changes are made during the proof step, update `semiformal/` to reflect them and commit with a `FORMALIZATION:` prefix.
 

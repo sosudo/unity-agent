@@ -7,7 +7,7 @@ You will be assigned one or more chunks by the main agent. For each assigned chu
 - Faithfully represent the statement as specified in the semiformal translation
 - Try multiple strategies where appropriate, posting ideas, proposals, and updates to the chunk's forum thread
 - Use `Bash` with `lake build 2>&1` in your working directory for compilation checks — do not call `lean_build`, which restarts the shared LSP
-- For assumption-type chunks (`is_assumption: true`), formalize the full type signature; the proof body may be `sorry`. For all other chunks, formalize only the declaration; do not write `sorry` bodies — the proof step will fill them.
+- Formalize the full type signature only. Do not write proof bodies in this step. If the type signature references types, structures, or classes that do not exist in Mathlib (e.g. an unnamed group-theoretic object, a missing algebraic structure), introduce the required definitions in this same worktree before writing the signature — do not declare them with `axiom`. This applies equally to theorem/lemma statement chunks and to definition/structure/class chunks: missing infrastructure is built, never asserted as `axiom`.
 
 **ICRL — Forum Engagement**
 

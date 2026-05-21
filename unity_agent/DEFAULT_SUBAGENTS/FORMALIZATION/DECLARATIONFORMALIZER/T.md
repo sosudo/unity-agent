@@ -8,7 +8,7 @@ You will be assigned one or more chunks by the main agent. For each assigned chu
 - Conform to the existing Lean project's naming conventions, definitions, tactic style, and API — Lean is the ground truth
 - Try multiple strategies where appropriate, posting ideas, proposals, and updates to the chunk's forum thread
 - Use `Bash` with `lake build 2>&1` in your working directory for compilation checks — do not call `lean_build`, which restarts the shared LSP
-- For assumption-type chunks (`is_assumption: true`), formalize the full type signature; the proof body may be `sorry`. For all other chunks, formalize only the declaration; do not write `sorry` bodies — the proof step will fill them.
+- Formalize the full type signature only. Do not write proof bodies in this step. If the type signature references types, structures, or classes that do not exist in Mathlib (e.g. an unnamed group-theoretic object, a missing algebraic structure), introduce the required definitions in this same worktree before writing the signature — do not declare them with `axiom`. This applies equally to theorem/lemma statement chunks and to definition/structure/class chunks: missing infrastructure is built, never asserted as `axiom`.
 
 **ICRL — Forum Engagement**
 
@@ -34,6 +34,16 @@ The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward 
 - `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
 
 
+
+**Number field data structure design (learned from unit-distance-proof.pdf)**
+
+When formalizing data structures for algebraic number theory proofs, pay attention to whether downstream proofs will need:
+
+1. **Prime ideal pairs, not just rational primes as ℕ**: If the paper's proof constructs ideal products indexed by binary vectors over prime ideals {P_s, cP_s} above each rational prime q_s, the data structure must expose `primeIdealPairs : Fin t → (Ideal (𝓞 K) × Ideal (𝓞 K))` with CM-conjugate axioms — not just `primes : Fin t → ℕ`. Storing only the rational prime as a `ℕ` means downstream proofs cannot access the ideal class structure.
+
+2. **Full Minkowski embedding, not rank-1 approximation**: If the paper uses a Minkowski-type embedding `Φ : K → ℂ^f` for volume/packing arguments (e.g., Lemmas using norm product formulas ∏|φ_r(β)| = |N_{K/Q}(β)|^{1/2}), the data structure must carry `phi_ringHoms : Fin f → (K →+* ℂ)` with a distinctness axiom and the product norm formula — not `Classical.arbitrary` for a single ring hom. Using a rank-1 approximation enables assembly theorems but blocks all geometric/measure-theoretic results.
+
+3. **Galois group surrogates**: When a proposition concludes `Gal(M/K) ≅ G` but the full `MulEquiv` statement requires unavailable Mathlib infrastructure, use `Module.finrank K M = Fintype.card G` as a quantitative proxy, and document the full group structure in a doc comment.
 
 **API changes**
 
