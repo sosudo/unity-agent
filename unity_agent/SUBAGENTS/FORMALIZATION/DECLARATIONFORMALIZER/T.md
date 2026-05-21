@@ -35,6 +35,16 @@ The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward 
 
 
 
+**Number field data structure design (learned from unit-distance-proof.pdf)**
+
+When formalizing data structures for algebraic number theory proofs, pay attention to whether downstream proofs will need:
+
+1. **Prime ideal pairs, not just rational primes as ℕ**: If the paper's proof constructs ideal products indexed by binary vectors over prime ideals {P_s, cP_s} above each rational prime q_s, the data structure must expose `primeIdealPairs : Fin t → (Ideal (𝓞 K) × Ideal (𝓞 K))` with CM-conjugate axioms — not just `primes : Fin t → ℕ`. Storing only the rational prime as a `ℕ` means downstream proofs cannot access the ideal class structure.
+
+2. **Full Minkowski embedding, not rank-1 approximation**: If the paper uses a Minkowski-type embedding `Φ : K → ℂ^f` for volume/packing arguments (e.g., Lemmas using norm product formulas ∏|φ_r(β)| = |N_{K/Q}(β)|^{1/2}), the data structure must carry `phi_ringHoms : Fin f → (K →+* ℂ)` with a distinctness axiom and the product norm formula — not `Classical.arbitrary` for a single ring hom. Using a rank-1 approximation enables assembly theorems but blocks all geometric/measure-theoretic results.
+
+3. **Galois group surrogates**: When a proposition concludes `Gal(M/K) ≅ G` but the full `MulEquiv` statement requires unavailable Mathlib infrastructure, use `Module.finrank K M = Fintype.card G` as a quantitative proxy, and document the full group structure in a doc comment.
+
 **API changes**
 
 If you make any API changes, report them to the main agent immediately so `semiformal/` can be updated accordingly.
