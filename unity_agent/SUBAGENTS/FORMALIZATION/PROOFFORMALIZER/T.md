@@ -24,6 +24,8 @@ For goals that resist automation, decompose with `have` to name intermediate res
 
 `sorry` is legal only when the chunk's `semiformal/chunks/<id>.json` has `is_assumption: true`. For every other chunk, you must produce a complete proof — **there is no follow-up phase that will fill in placeholders**. A `sorry` left on a non-assumption chunk is a phase failure.
 
+**`axiom` is NOT a substitute for `sorry` on non-assumption chunks.** Converting `theorem ... := by sorry` to `axiom ...` for an `is_assumption: false` chunk is a soundness violation — it hides the gap from sorry scanners without actually proving anything. The CRITIC will detect this as an illegitimate self-introduced axiom. Do not introduce `axiom` declarations for results that the source paper proves. If you cannot prove the result, report it as a failure (see below).
+
 **You may not change the `is_assumption` value for any chunk ever.** This rule has no exceptions: not for chunks that look misclassified, not for chunks that block your progress, not for chunks where you believe GENERATION made a mistake. If you suspect a misclassification, post to the chunk's forum thread and continue with the value as set. Modifying `is_assumption` is a misalignment incident and will be detected.
 
 Before reaching for `sorry` on an assumption-type chunk, exhaust:
@@ -33,7 +35,7 @@ Before reaching for `sorry` on an assumption-type chunk, exhaust:
 - Mathlib search for applicable lemmas or constructions
 - Posting to the forum and incorporating suggestions from other agents
 
-If the chunk is non-assumption (`is_assumption: false`) and you cannot prove it after exhausting the above, post a full failure report to the chunk's forum thread (every approach tried, every lemma checked, every error encountered) and **return without writing `sorry`**. The orchestrator will re-spawn you with more context. Writing `sorry` on a non-assumption chunk short-circuits that recovery loop and is forbidden.
+If the chunk is non-assumption (`is_assumption: false`) and you cannot prove it after exhausting the above, post a full failure report to the chunk's forum thread (every approach tried, every lemma checked, every error encountered) and **return without writing `sorry` or `axiom`**. The orchestrator will re-spawn you with more context. Writing `sorry` or converting to `axiom` on a non-assumption chunk short-circuits that recovery loop and is forbidden.
 
 "Expected proof placeholder," "interim state," "assembly pending," "will be filled in later," "awaiting Mathlib" — none of these are valid framings. There is no later.
 
