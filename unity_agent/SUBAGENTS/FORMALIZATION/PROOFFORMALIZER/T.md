@@ -77,6 +77,22 @@ The test: **Is this field providing data that the proof algorithm needs, or is i
 
 If a structure genuinely needs a new data field, document the change on the forum layer coordination thread, update dependent files, and commit. If you are tempted to add a `Prop → goal` field to avoid proving something — return without writing anything instead.
 
+**Post-build axiom audit**
+
+After the final `lake build` succeeds, the orchestrator (or the last ProofFormalizer in the merge sequence) should run:
+
+```bash
+lake env lean --run <(echo '#import UnitDistance\n#print axioms UnitDistance.theorem11_mainResult') > AXIOM_AUDIT.txt 2>&1
+git add AXIOM_AUDIT.txt && git commit -m "FORMALIZATION: add AXIOM_AUDIT.txt"
+```
+
+(Substitute the correct import path and main theorem name for the project.) This generates the required `AXIOM_AUDIT.txt` gate file and makes the axiom list visible to the CRITIC. **If AXIOM_AUDIT.txt is missing, the CRITIC will flag it as a gate failure.** Do not assume the CRITIC or the RETROSPECTIVE agent will generate this file — it is the formalization phase's responsibility.
+
+Similarly, whenever `REMAINING_AXIOMS.md` exists and claims an axiom is "✅ RESOLVED", verify that the `axiom` keyword is **literally absent** from the relevant Lean file before accepting that claim:
+```bash
+grep -r 'axiom <name>' UnitDistance/  # must return nothing for a genuine resolution
+```
+
 **Worktree**
 
 The orchestrator that spawned you has assigned you an isolated git worktree for your chunk. The worktree path is provided in your spawn prompt (look for a path under `.worktrees/` or labeled `worktree_path`). **Before doing anything else, `cd` to that path.** All reads, writes, and builds must happen inside that worktree — never modify files in the main project directory.
