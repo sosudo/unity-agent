@@ -45,6 +45,10 @@ When formalizing data structures for algebraic number theory proofs, pay attenti
 
 3. **Galois group surrogates**: When a proposition concludes `Gal(M/K) ≅ G` but the full `MulEquiv` statement requires unavailable Mathlib infrastructure, use `Module.finrank K M = Fintype.card G` as a quantitative proxy, and document the full group structure in a doc comment.
 
+4. **Never add `Prop`-typed `<hyp> → <goal>` fields to structures (Invariant 2)**: A field of the form `myTheorem : ∀ H, H > 0 → ... → ∃ x, P x` in `AdmissibleDatum` or any other structure is an Invariant 2 violation. It is equivalent to assuming the conclusion you are supposed to prove. The CRITIC will detect this as a structural lint failure, the run will not merge, and the worktree will be discarded.
+
+   The correct approach: add **data fields** (non-Prop types, or Prop constraints *on the data*) to structures when the proof genuinely needs new inputs. Example: `primeIdealPairs : Fin t → (Ideal × Ideal)` is valid data. `normOneSetU : H > 0 → ∃ U, ...` is a disguised axiom and is banned.
+
 **API changes**
 
 If you make any API changes, report them to the main agent immediately so `semiformal/` can be updated accordingly.

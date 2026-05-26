@@ -46,6 +46,37 @@ If after exhausting every avenue the chunk still cannot be closed, post a full f
 
 "Expected proof placeholder," "interim state," "assembly pending," "will be filled in later," "awaiting Mathlib," "standard textbook result," "out of scope" — none of these are valid framings. There is no later. If Mathlib lacks it, build it here.
 
+**INVARIANT 2: Never bundle proof obligations into structure fields (Prop-typed fields)**
+
+A structurally equivalent but banned workaround is adding a `Prop`-typed field to an existing structure (`AdmissibleDatum`, `MinkowskiLatticeData`, `ProPGroup`, or any other) whose type encodes the very theorem you are trying to prove. Examples of **forbidden** patterns:
+
+```lean
+-- FORBIDDEN: adding the proof obligation as a structure field
+structure AdmissibleDatum where
+  ...
+  normOneSetU : ∀ H : ℝ, H > 0 → h(K) ≤ H^f → ∃ U : Finset K, ...  -- BANNED
+
+structure MinkowskiLatticeData where
+  ...
+  coset_averaging : ∀ γ > 0, ..., ∃ a, E_a ≥ ...  -- BANNED
+```
+
+Projecting such a field to prove the theorem is identical to `axiom` and is detected by the CRITIC as an Invariant 2 violation. The run will not merge if such fields are present.
+
+The **valid** data extension pattern (for genuinely missing data, not proofs):
+```lean
+-- VALID: adding actual data that the proof can use
+structure AdmissibleDatum where
+  ...
+  primeIdealPairs : Fin t → (Ideal (𝓞 K) × Ideal (𝓞 K))  -- actual ideal data, not a Prop
+  primePairs_conjugate : ∀ b, (primeIdealPairs b).2 = Ideal.comap (IsCMField.complexConj K) (primeIdealPairs b).1
+  -- ^ a Prop constraint ON the data, not the theorem itself
+```
+
+The test: **Is this field providing data that the proof algorithm needs, or is it assuming the conclusion of the theorem?** Data fields are valid; conclusion fields are banned.
+
+If a structure genuinely needs a new data field, document the change on the forum layer coordination thread, update dependent files, and commit. If you are tempted to add a `Prop → goal` field to avoid proving something — return without writing anything instead.
+
 **Worktree**
 
 The orchestrator that spawned you has assigned you an isolated git worktree for your chunk. The worktree path is provided in your spawn prompt (look for a path under `.worktrees/` or labeled `worktree_path`). **Before doing anything else, `cd` to that path.** All reads, writes, and builds must happen inside that worktree — never modify files in the main project directory.
