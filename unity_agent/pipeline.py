@@ -957,7 +957,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         recurse = parse_bool(os.getenv("RECURSE"))
         max_critic_iterations = parse_int(os.getenv("MAX_CRITIC_ITERATIONS")) or 3
         max_validation_iterations = parse_int(os.getenv("MAX_VALIDATION_ITERATIONS"))
-        forum_port = parse_int(os.getenv("FORUM_PORT")) or 8080
+        forum_port = parse_int(os.getenv("FORUM_PORT")) or 6367
         lean_lsp_port = parse_int(os.getenv("LEAN_LSP_PORT")) or 6368
         claude_code_stream_close_timeout = parse_int(os.getenv("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT")) or 180000
         os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = str(claude_code_stream_close_timeout)

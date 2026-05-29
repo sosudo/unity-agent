@@ -3,7 +3,7 @@
 A view-only web interface for the unity forum and dependency DAG.
 Reads forum/*.json and dag.json directly. Started automatically by the pipeline.
 
-    python -m unity_agent.forum_web --forum-dir ./forum --root-dir . --port 8080
+    python -m unity_agent.forum_web --forum-dir ./forum --root-dir . --port 6367
 """
 
 import argparse
@@ -1113,7 +1113,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Unity Forum Web UI")
     parser.add_argument("--forum-dir", default="forum")
     parser.add_argument("--root-dir", default=".", help="Root directory where dag.json and Lean files live")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=6367)
     args = parser.parse_args()
     FORUM_DIR = Path(args.forum_dir)
     ROOT_DIR = Path(args.root_dir)
