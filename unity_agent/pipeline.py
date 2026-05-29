@@ -86,8 +86,12 @@ def _commit_phase(phase_name: str, metadata: dict | None = None) -> None:
     try:
         subprocess.run(["git", "add", "-A"], check=True, capture_output=True)
         subprocess.run(["git", "commit", "-m", msg, "--allow-empty"], check=True, capture_output=True)
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or b"").decode("utf-8", errors="replace").strip() if isinstance(e.stderr, bytes) else (e.stderr or "").strip()
+        logging.warning(
+            f"_commit_phase('{phase_name}') failed (rc={e.returncode}): "
+            f"{stderr or 'no stderr'} — resolver will see stale last-checkpoint"
+        )
 
 
 _JSON_ESCAPE_OR_STRAY = re.compile(r'\\(?:["\\/bfnrtu]|u[0-9a-fA-F]{4})|\\')
@@ -1184,11 +1188,18 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             try:
                 _lean_lsp_proc.terminate()
                 _lean_lsp_proc.wait(timeout=5)
-            except Exception:
+            except Exception as term_err:
+                logging.warning(
+                    f"_restart_lean_lsp_mcp: terminate failed ({term_err}); attempting SIGKILL"
+                )
                 try:
                     _lean_lsp_proc.kill()
-                except Exception:
-                    pass
+                    _lean_lsp_proc.wait(timeout=5)
+                except Exception as kill_err:
+                    logging.error(
+                        f"_restart_lean_lsp_mcp: kill also failed ({kill_err}); "
+                        f"zombie lean-lsp-mcp may hold port {lean_lsp_port}"
+                    )
         _lean_lsp_stderr_file = open(_lean_lsp_stderr_path, "a")
         _lean_lsp_proc = subprocess.Popen(
             ["uvx", "lean-lsp-mcp",
