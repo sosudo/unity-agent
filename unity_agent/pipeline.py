@@ -836,6 +836,53 @@ def _assert_semiformal_field_propagation(run_dir: Path) -> list[dict]:
     return drifts
 
 
+def _ir_gate_blocked_chunks(run_dir: Path) -> set[str]:
+    """Return chunk IDs whose IR contract is unhealthy this iter.
+
+    Signal: chunk IDs listed in SEMIFORMAL_FIELD_DRIFT.md. These chunks are dropped
+    from formalizer dispatch and addressed by the next critic/retro pass before
+    re-attempting formalization. The healthy chunks proceed in parallel — this
+    avoids the coarse-grained "any drift halts all chunks" behaviour that Workstream
+    A's S0.4 introduced at the semiformalization boundary. Inspired by Archon's
+    HARD GATE per-file dispatch precondition (see COMPETITIVE_REVIEW.md §5.B).
+    """
+    drift_path = run_dir / "SEMIFORMAL_FIELD_DRIFT.md"
+    if not drift_path.exists():
+        return set()
+    try:
+        text = drift_path.read_text()
+    except Exception:
+        return set()
+    if "None detected" in text:
+        return set()
+    blocked: set[str] = set()
+    # Drift report format: "- `<chunk_id>` field `<field>`: ..."
+    for m in re.finditer(r"^- `([^`]+)`", text, re.MULTILINE):
+        blocked.add(m.group(1))
+    return blocked
+
+
+def _apply_ir_gate(dag_layers: list[list[str]], run_dir: Path, phase_label: str) -> list[list[str]]:
+    """Drop IR-blocked chunks from dispatch layers. Logs the partition for observability."""
+    blocked = _ir_gate_blocked_chunks(run_dir)
+    if not blocked:
+        return dag_layers
+    all_chunks = {cid for layer in dag_layers for cid in layer}
+    relevant = all_chunks & blocked
+    if not relevant:
+        return dag_layers
+    safe = all_chunks - relevant
+    logging.warning(
+        f"[ir-gate {phase_label}] {len(relevant)} chunk(s) blocked by IR contract issues "
+        f"(SEMIFORMAL_FIELD_DRIFT.md): {sorted(relevant)} — dropped from this iter's dispatch"
+    )
+    logging.info(
+        f"[ir-gate {phase_label}] proceeding with {len(safe)} healthy chunk(s): {sorted(safe)}"
+    )
+    filtered = [[cid for cid in layer if cid in safe] for layer in dag_layers]
+    return [layer for layer in filtered if layer]
+
+
 async def _warm_lean_lsp(project_path: Path) -> None:
     """Pre-warm the Lean LSP by opening a trivial file, loading OLEANs into the OS page cache."""
     def _do_warmup():
@@ -2130,6 +2177,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
+                    dag_layers = _apply_ir_gate(dag_layers, Path.cwd(), "prove-formalization")
                     _total_chunks = sum(len(layer) for layer in dag_layers)
                     logging.info(
                         f"[prove-formalization] iteration={iteration}: creating worktrees for "
@@ -2977,6 +3025,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
+                    dag_layers = _apply_ir_gate(dag_layers, Path.cwd(), "formalization F")
                     _total_chunks = sum(len(layer) for layer in dag_layers)
                     logging.info(
                         f"[formalization F] iteration={iteration}: creating worktrees for "
@@ -3077,6 +3126,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     dag_data = json.loads(Path("dag.json").read_text()) if Path("dag.json").exists() else {"layers": [], "chunks": []}
                     dag_layers = dag_data.get("layers", [])
+                    dag_layers = _apply_ir_gate(dag_layers, Path.cwd(), "formalization T")
                     _total_chunks = sum(len(layer) for layer in dag_layers)
                     logging.info(
                         f"[formalization T] iteration={iteration}: creating worktrees for "
