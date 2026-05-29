@@ -582,6 +582,169 @@ def forum_archive(thread_id: str, post_id: str, reason: str, archiver: str) -> d
     }
 
 
+# ── Scratchpad: structured attempt logging ────────────────────────────────────
+# The forum doubles as an external working-memory for chunk formalization
+# attempts so successor agents don't re-derive dead ends. forum_log_attempt
+# writes a small structured record per attempt; forum_chunk_history reads
+# just those records, newest-first, for one chunk.
+
+_ATTEMPT_OUTCOMES = {
+    "success",          # build succeeded, goal closed
+    "compile_error",    # lake build failed
+    "goal_unchanged",   # tactic ran but goal didn't move
+    "timeout",          # build / lean LSP timed out
+    "gave_up",          # agent decided this approach won't work
+    "partial",          # progress but not closed
+}
+
+
+@mcp.tool()
+def forum_log_attempt(
+    chunk_id: str,
+    author: str,
+    what: str,
+    outcome: str,
+    error: str = "",
+    notes: str = "",
+) -> dict:
+    """Log a structured attempt at a chunk's formalization or proof.
+
+    Writes to the chunk's thread (`chunk-<chunk_id>`, auto-created) as an
+    `attempt`-tagged post with the structured fields stored on the post.
+
+    `outcome` must be one of: success, compile_error, goal_unchanged,
+    timeout, gave_up, partial.
+
+    `what` is a one-line description of the approach (e.g. "induction on n;
+    simp [List.foldr_cons] in inductive step"). Be concrete so future
+    readers can pattern-match.
+
+    `error` and `notes` are optional. Include the verbatim error head if
+    outcome is compile_error so search across attempts can match it.
+
+    Earns +0.2 ICRL (lower than forum_post so frequent fine-grained logs
+    are encouraged). Returns the post_id and current balance.
+    """
+    if outcome not in _ATTEMPT_OUTCOMES:
+        raise ValueError(
+            f"outcome must be one of {sorted(_ATTEMPT_OUTCOMES)}; got {outcome!r}"
+        )
+    if not author or not author.strip():
+        raise ValueError("author must be a non-empty string")
+    if not chunk_id or not chunk_id.strip():
+        raise ValueError("chunk_id must be a non-empty string")
+    if not what or not what.strip():
+        raise ValueError("what must describe what was tried")
+
+    thread_id = f"chunk-{chunk_id}"
+    if not _thread_path(thread_id).exists():
+        _save({
+            "thread_id": thread_id,
+            "title": f"Chunk {chunk_id}",
+            "description": f"Per-chunk coordination + attempt log for {chunk_id}.",
+            "created_at": int(time.time()),
+            "posts": [],
+        })
+
+    body_parts = [f"**Attempt** — outcome: `{outcome}`", "", f"**Tried:** {what}"]
+    if error:
+        body_parts.extend(["", f"**Error:**\n```\n{error}\n```"])
+    if notes:
+        body_parts.extend(["", f"**Notes:** {notes}"])
+    body = "\n".join(body_parts)
+
+    with _thread_lock(thread_id):
+        data = _load(thread_id)
+        post = {
+            "post_id": uuid.uuid4().hex[:8],
+            "author": author,
+            "content": body,
+            "timestamp": int(time.time()),
+            "upvotes": 0,
+            "downvotes": 0,
+            "votes_by_dimension": {},
+            "voter_registry": {},
+            "reply_to": [],
+            "tags": ["attempt"],
+            "archived": False,
+            "attempt": {
+                "chunk_id": chunk_id,
+                "what": what,
+                "outcome": outcome,
+                "error": error,
+                "notes": notes,
+            },
+        }
+        data["posts"].append(post)
+        _save(data)
+
+    rec = _credit(author, 0.2, "forum_log_attempt", thread_id, what[:100])
+    return {
+        "post_id": post["post_id"],
+        "thread_id": thread_id,
+        "chunk_id": chunk_id,
+        "outcome": outcome,
+        "icrl_balance": rec["balance"],
+        "icrl_delta": +0.2,
+    }
+
+
+@mcp.tool()
+def forum_chunk_history(chunk_id: str, limit: int = 10) -> dict:
+    """Return the latest structured attempts for a chunk, newest first.
+
+    Filters the chunk's thread (`chunk-<chunk_id>`) for `attempt`-tagged
+    posts and returns only those, with the structured fields surfaced.
+    `limit` caps how many are returned (default 10).
+
+    Call this BEFORE planning a new approach on a chunk that's been worked
+    on before — if your intended tactic is already marked failed in the
+    history, pick a different one or read the failure notes first.
+    """
+    if not chunk_id or not chunk_id.strip():
+        raise ValueError("chunk_id must be a non-empty string")
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+
+    thread_id = f"chunk-{chunk_id}"
+    if not _thread_path(thread_id).exists():
+        return {
+            "chunk_id": chunk_id,
+            "thread_id": thread_id,
+            "attempt_count": 0,
+            "attempts": [],
+        }
+
+    data = _load(thread_id)
+    attempts = []
+    for post in reversed(data.get("posts", [])):
+        if "attempt" not in post.get("tags", []):
+            continue
+        if post.get("archived"):
+            continue
+        record = post.get("attempt")
+        if not record:
+            continue
+        attempts.append({
+            "post_id": post["post_id"],
+            "author": post["author"],
+            "timestamp": post["timestamp"],
+            "chunk_id": record.get("chunk_id", chunk_id),
+            "what": record.get("what", ""),
+            "outcome": record.get("outcome", ""),
+            "error": record.get("error", ""),
+            "notes": record.get("notes", ""),
+        })
+        if len(attempts) >= limit:
+            break
+    return {
+        "chunk_id": chunk_id,
+        "thread_id": thread_id,
+        "attempt_count": len(attempts),
+        "attempts": attempts,
+    }
+
+
 @mcp.tool()
 def forum_read(thread_id: str, sort: str = "hot") -> dict:
     """Read a forum thread.
