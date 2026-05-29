@@ -112,9 +112,20 @@ async def main(ctx, source, project, context, prove, depth, output_dir):
     type=click.Path(dir_okay=False),
     help="Output path for .env file"
 )
-def setup(output):
-    """Generate .env configuration file interactively."""
-    run_setup(output)
+@click.option(
+    "--advanced/--simple",
+    default=False,
+    help="Advanced mode prompts for every knob; simple mode (default) asks only the essentials.",
+)
+def setup(output, advanced):
+    """Generate .env configuration file interactively.
+
+    Simple mode (default) asks only for your API credentials and writes
+    sensible defaults for every other variable. Advanced mode walks
+    through every knob — use it when you want to deviate from defaults
+    interactively rather than editing the .env file by hand.
+    """
+    run_setup(output, advanced=advanced)
 
 
 @main.command()
