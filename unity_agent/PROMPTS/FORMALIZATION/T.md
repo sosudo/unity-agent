@@ -40,7 +40,7 @@ The Unity Forum uses in-context reinforcement learning (ICRL) credits to reward 
 - `forum_approve_dimension(name)` — approve a proposed vote dimension
 - `forum_check_balance(author)` — check ICRL credit balance; call at start and end of your task
 
-The target is a partially completed Lean project. Familiarize yourself with its existing definitions, naming conventions, tactic style, and API before proceeding. The Lean project is the ground truth — all formalization decisions must conform to it.
+The target is a partially completed Lean project. Familiarize yourself with its existing definitions, naming conventions, tactic style, and API before proceeding. The Lean project provides the naming conventions, tactic style, and reusable API — but the **source remains the ground truth for statements and proof structure** (see `**Source is ground truth**` below). When the existing Lean project and the source diverge, follow the source for what to prove and how to structure it; follow the Lean project for how to name things and which API to call.
 
 **Lean LSP Tools**
 

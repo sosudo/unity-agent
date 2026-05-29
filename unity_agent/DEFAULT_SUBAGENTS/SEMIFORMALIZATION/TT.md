@@ -11,7 +11,7 @@ Independently produce a complete draft chunking and translation of the source in
 The translation should be complete, well-formed, and consistent with the existing Lean project:
 - Fill in missing information where it can be reasonably inferred
 - Resolve ambiguities where possible, recording the resolution and reasoning in the appropriate IR fields
-- Conform to the existing Lean project's naming conventions, definitions, and API — Lean is the ground truth; if the source conflicts with the existing Lean project, the Lean project wins
+- Conform to the existing Lean project's naming conventions, definitions, and API where applicable. The **source is authoritative for statements and proof structure**; if a source result is already present in the Lean project, record it via `mathlib_refs` / external dependency tracking rather than re-deriving it, but do not silently substitute a different statement or proof structure from the project
 - Mark anything that cannot be resolved or inferred using the IR spec's ambiguity and incompleteness markers
 - Demote linguistic content carrying no mathematical information to metadata
 

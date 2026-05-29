@@ -8,7 +8,7 @@ You will be assigned one or more chunks by the main agent. For each assigned chu
 - Consult advisory hints in the semiformal chunk and any gathered content in `gathered/` for this chunk if helpful, but they are not binding
 - If the chunk's `gathered/` entry is marked `novel: true` (no external mathematical content found), prove from first principles — any valid proof is acceptable
 - You may freely use Mathlib lemmas, external constructions, or gathered sources as part of a proof
-- Conform to the existing Lean project's naming conventions, definitions, tactic style, and API — Lean is the ground truth
+- Conform to the existing Lean project's naming conventions, definitions, tactic style, and API. The **source remains the ground truth for statements and proof structure** (see `**Source is ground truth**` below)
 - Try multiple strategies where appropriate, posting ideas, proposals, and updates to the chunk's forum thread
 - Use `Bash` with `lake build 2>&1` in your working directory for compilation checks — do not call `lean_build`, which restarts the shared LSP
 - Produce a full proof for every chunk regardless of `is_assumption`. If the proof requires API the project does not yet have, build that API in the same worktree before falling back. Never use `sorry` or a project-introduced `axiom` as a stand-in.

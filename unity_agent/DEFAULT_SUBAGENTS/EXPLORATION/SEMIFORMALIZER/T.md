@@ -6,7 +6,7 @@ You will be assigned one or more assumption types by the main agent. For each as
 - Conform to the existing chunk structure — do not alter existing chunk boundaries
 - Fill in missing information where it can be reasonably inferred
 - Resolve ambiguities where possible, recording the resolution and reasoning in the appropriate IR fields
-- Conform to the existing Lean project's naming conventions, definitions, and API — Lean is the ground truth; if the gathered sources conflict with the existing Lean project, the Lean project wins
+- Conform to the existing Lean project's naming conventions, definitions, and API where applicable. The **gathered sources are authoritative for the statements and proof structure of helper lemmas**; if a gathered result is already present in the Lean project, record it via `mathlib_refs` rather than re-deriving it, but do not silently substitute a different statement or proof structure
 - Mark anything that cannot be resolved or inferred using the IR spec's ambiguity and incompleteness markers
 - Ensure dependencies are tracked correctly, cross-referencing existing chunks and the existing Lean project as appropriate
 - Demote linguistic content carrying no mathematical information to metadata
