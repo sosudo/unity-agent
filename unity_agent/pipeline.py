@@ -1269,6 +1269,16 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     # ICRL hook: reward agents for forum participation and surface vote feedback
     _balances_path = Path.cwd() / "forum" / "balances.json"
 
+    # Canonicalize agent identity for ledger lookup so casing variants of the
+    # same role read the same balance row (matches forum_mcp._canonical_author).
+    _AUTHOR_SUFFIX_RE = re.compile(r'-(subagent|agent|node|worker)$')
+
+    def _canonical_actor(name: str) -> str:
+        n = (name or "").strip().lower()
+        n = re.sub(r"[\s_-]+", "-", n)
+        n = _AUTHOR_SUFFIX_RE.sub("", n)
+        return n
+
     async def _forum_reward_hook(hook_input: dict, _tool_use_id: str | None, context: object) -> dict:
         tool_name = hook_input.get("tool_name", "")
         tool_input = hook_input.get("tool_input", {})
@@ -1282,7 +1292,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             return {"continue_": True}
         try:
             balances = json.loads(_balances_path.read_text())
-            balance = balances.get(actor, {}).get("balance", 0.0)
+            balance = balances.get(_canonical_actor(actor), {}).get("balance", 0.0)
         except Exception:
             balance = 0.0
         return {

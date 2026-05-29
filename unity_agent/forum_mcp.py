@@ -135,6 +135,21 @@ def _save(data: dict) -> None:
 
 # ── Balances / ICRL ───────────────────────────────────────────────────────────
 
+# Ledger keys are canonical (lowercase, separator-collapsed, common subagent
+# suffixes stripped) so `FORMALIZER`, `Formalizer`, and `Formalizer-Subagent`
+# all credit the same row. The first display form is preserved in
+# `display_name` for human inspection.
+_AUTHOR_SUFFIX_RE = re.compile(r'-(subagent|agent|node|worker)$')
+
+
+def _canonical_author(name: str) -> str:
+    """Canonicalize agent identity for ledger purposes."""
+    n = (name or "").strip().lower()
+    n = re.sub(r"[\s_-]+", "-", n)
+    n = _AUTHOR_SUFFIX_RE.sub("", n)
+    return n
+
+
 def _balances_path() -> Path:
     return FORUM_DIR / "balances.json"
 
@@ -155,10 +170,17 @@ def _save_balances(balances: dict) -> None:
 
 
 def _credit(author: str, delta: float, event: str, thread_id: str, excerpt: str = "") -> dict:
+    key = _canonical_author(author)
     balances = _load_balances()
-    if author not in balances:
-        balances[author] = {"balance": 0.0, "history": [], "notifications": []}
-    rec = balances[author]
+    if key not in balances:
+        balances[key] = {
+            "display_name": author,
+            "balance": 0.0,
+            "history": [],
+            "notifications": [],
+        }
+    rec = balances[key]
+    rec.setdefault("display_name", author)
     rec["balance"] = round(rec["balance"] + delta, 2)
     rec["history"].append({
         "event": event,
@@ -172,11 +194,23 @@ def _credit(author: str, delta: float, event: str, thread_id: str, excerpt: str 
     return rec
 
 
-def _push_notification(author: str, delta: float, event: str, thread_id: str, post_id: str, excerpt: str) -> None:
+def _push_notification(author: str, delta: float, event: str, thread_id: str, post_id: str, excerpt: str, *, only_existing: bool = False) -> None:
+    key = _canonical_author(author)
     balances = _load_balances()
-    if author not in balances:
-        balances[author] = {"balance": 0.0, "history": [], "notifications": []}
-    rec = balances[author]
+    if key not in balances:
+        if only_existing:
+            # Don't materialise a balance row just because someone @mentioned a
+            # name we've never seen post. Prevents Lean code snippets and stray
+            # @-strings from creating phantom agents.
+            return
+        balances[key] = {
+            "display_name": author,
+            "balance": 0.0,
+            "history": [],
+            "notifications": [],
+        }
+    rec = balances[key]
+    rec.setdefault("display_name", author)
     rec["balance"] = round(rec["balance"] + delta, 2)
     rec["history"].append({
         "event": event,
@@ -200,18 +234,21 @@ def _push_notification(author: str, delta: float, event: str, thread_id: str, po
 
 def _notify_all(delta: float, event: str, thread_id: str, post_id: str, excerpt: str, exclude: str = "") -> None:
     """Push a notification to every known agent except `exclude`."""
+    excl_key = _canonical_author(exclude) if exclude else ""
     balances = _load_balances()
-    for author in list(balances.keys()):
-        if author != exclude:
-            _push_notification(author, delta, event, thread_id, post_id, excerpt)
+    for key in list(balances.keys()):
+        if key != excl_key:
+            display = balances[key].get("display_name", key)
+            _push_notification(display, delta, event, thread_id, post_id, excerpt)
 
 
 def _drain_notifications(author: str) -> list:
+    key = _canonical_author(author)
     balances = _load_balances()
-    if author not in balances:
+    if key not in balances:
         return []
-    notifications = balances[author].get("notifications", [])
-    balances[author]["notifications"] = []
+    notifications = balances[key].get("notifications", [])
+    balances[key]["notifications"] = []
     _save_balances(balances)
     return notifications
 
@@ -325,10 +362,19 @@ def _forum_post_locked(thread_id: str, author: str, content: str, reply_to: list
     }
     data["posts"].append(post)
     _save(data)
+    seen_mentions: set[str] = set()
     for m in _MENTION_RE.finditer(content):
         mentioned = m.group(1)
-        if mentioned != author:
-            _push_notification(mentioned, 0.0, "mention", thread_id, post["post_id"], content[:100])
+        mentioned_key = _canonical_author(mentioned)
+        if mentioned_key == _canonical_author(author) or mentioned_key in seen_mentions:
+            continue
+        seen_mentions.add(mentioned_key)
+        # only_existing=True so phantom @-strings (Lean code that slipped past
+        # _MENTION_RE, stray tokens) don't materialise ledger rows.
+        _push_notification(
+            mentioned, 0.0, "mention", thread_id, post["post_id"],
+            content[:100], only_existing=True,
+        )
     rec = _credit(author, 0.5, "forum_post", thread_id, content[:100])
     notifications = _drain_notifications(author)
     result = {k: v for k, v in post.items()}
@@ -506,12 +552,13 @@ def forum_check_balance(author: str, drain: bool = True) -> dict:
     """
     if not author or not author.strip():
         raise ValueError("author must be a non-empty string")
+    key = _canonical_author(author)
     balances = _load_balances()
-    if author not in balances:
+    if key not in balances:
         return {"author": author, "balance": 0.0, "history": [], "pending_notifications": []}
-    rec = balances[author]
+    rec = balances[key]
     result = {
-        "author": author,
+        "author": rec.get("display_name", author),
         "balance": rec["balance"],
         "history": rec["history"],
         "pending_notifications": list(rec.get("notifications", [])),
@@ -550,7 +597,10 @@ def forum_list() -> dict:
     config = _load_config()
     balances = _load_balances()
     leaderboard = sorted(
-        [{"author": a, "balance": r["balance"]} for a, r in balances.items()],
+        [
+            {"author": r.get("display_name", a), "balance": r["balance"]}
+            for a, r in balances.items()
+        ],
         key=lambda x: x["balance"],
         reverse=True,
     ) if balances else []
