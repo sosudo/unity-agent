@@ -1353,6 +1353,12 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
     # Resolver infrastructure
     _retries: dict[str, int] = {}
+    _rate_limit_retries: dict[str, int] = {}
+
+    def _phase_succeeded(phase_name: str) -> None:
+        """Reset per-phase retry counters when a phase reaches a clean checkpoint."""
+        _retries.pop(phase_name, None)
+        _rate_limit_retries.pop(phase_name, None)
 
     async def _invoke_resolver(phase_name: str, error: Exception, ctx: dict | None = None) -> None:
         """Classify error and either sleep (rate limit) or spawn resolver agent, then return for retry."""
@@ -1377,8 +1383,19 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             if not m:
                 m = re.search(r"reset.in\s+(\d+)", err_str, re.IGNORECASE)
             if m:
-                wait = int(m.group(1))
-            logging.warning(f"Rate limit detected — sleeping {wait}s before retry.")
+                wait = min(int(m.group(1)), 600)  # cap at 10 min
+            _rate_limit_retries[phase_name] = _rate_limit_retries.get(phase_name, 0) + 1
+            attempts = _rate_limit_retries[phase_name]
+            if attempts > 5:
+                logging.critical(
+                    f"CRITICAL: sticky rate limit on phase '{phase_name}' — "
+                    f"{attempts} consecutive rate-limit retries. Giving up."
+                )
+                exit(1)
+            logging.warning(
+                f"Rate limit detected on phase '{phase_name}' — sleeping {wait}s "
+                f"(rate-limit attempt {attempts}/5)."
+            )
             await asyncio.sleep(wait)
             return
 
@@ -1585,6 +1602,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             float(state.get("secondary_spend", 0.0)),
         )
         _commit_phase("escalation", {"iteration": iteration, "cost": f"{run_cost:.4f}"})
+        _phase_succeeded("escalation")
 
     # Ensure lake cache + update finished before any agent phase starts
     try:
@@ -1700,6 +1718,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     logging.info("Strategy formalization phase completed successfully!")
                     _commit_phase("strategy-formalization", {"iteration": iteration})
+                    _phase_succeeded("strategy-formalization")
                     break
                 except Exception as e:
                     await _invoke_resolver("strategy-formalization", e)
@@ -1735,6 +1754,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     logging.info("Strategy critic phase completed successfully!")
                     _commit_phase("strategy-critic", {"iteration": iteration})
+                    _phase_succeeded("strategy-critic")
                     break
                 except Exception as e:
                     await _invoke_resolver("strategy-critic", e)
@@ -1814,6 +1834,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                 logging.info("Exploration phase completed successfully!")
                 _commit_phase("exploration")
+                _phase_succeeded("exploration")
                 break
             except Exception as e:
                 await _invoke_resolver("exploration", e)
@@ -1868,6 +1889,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                             "routing through resolver for fresh-session retry"
                         )
                     _commit_phase("generation")
+                    _phase_succeeded("generation")
                     break
                 except Exception as e:
                     await _invoke_resolver("generation", e)
@@ -1908,6 +1930,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                             "routing through resolver for fresh-session retry"
                         )
                     _commit_phase("validation")
+                    _phase_succeeded("validation")
                     break
                 except SystemExit:
                     raise
@@ -1981,6 +2004,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as _drift_err:
                     logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
+                _phase_succeeded("semiformalization")
                 break
             except Exception as e:
                 await _invoke_resolver("semiformalization", e)
@@ -2070,6 +2094,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     logging.info("Formalization phase completed successfully!")
                     _commit_phase("formalization", {"iteration": iteration})
+                    _phase_succeeded("formalization")
                     break
                 except Exception as e:
                     for cid, wt in list(worktree_assignments.items()):
@@ -2138,6 +2163,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                             "routing through resolver for fresh-session retry"
                         )
                     _commit_phase("critic", {"iteration": iteration})
+                    _phase_succeeded("critic")
                     break
                 except Exception as e:
                     await _invoke_resolver("critic", e)
@@ -2284,6 +2310,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                 logging.info("Source scan phase completed successfully!")
                 _commit_phase("source-scan")
+                _phase_succeeded("source-scan")
                 break
             except Exception as e:
                 await _invoke_resolver("source-scan", e)
@@ -2341,6 +2368,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         "routing through resolver for fresh-session retry"
                     )
                 _commit_phase("generation")
+                _phase_succeeded("generation")
                 break
             except Exception as e:
                 await _invoke_resolver("generation", e)
@@ -2381,6 +2409,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         "routing through resolver for fresh-session retry"
                     )
                 _commit_phase("validation")
+                _phase_succeeded("validation")
                 break
             except SystemExit:
                 raise
@@ -2458,6 +2487,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as _drift_err:
                     logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
+                _phase_succeeded("semiformalization")
                 break
             except Exception as e:
                 await _invoke_resolver("semiformalization", e)
@@ -2504,6 +2534,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as _drift_err:
                     logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
+                _phase_succeeded("semiformalization")
                 break
             except Exception as e:
                 await _invoke_resolver("semiformalization", e)
@@ -2550,6 +2581,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 except Exception as _drift_err:
                     logging.error(f"ERROR (semiformal field drift check): {_drift_err}")
                 _commit_phase("semiformalization")
+                _phase_succeeded("semiformalization")
                 break
             except Exception as e:
                 await _invoke_resolver("semiformalization", e)
@@ -2619,6 +2651,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
+                        _phase_succeeded("exploration")
                         break
                     except Exception as e:
                         await _invoke_resolver("exploration", e)
@@ -2675,6 +2708,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
+                        _phase_succeeded("exploration")
                         break
                     except Exception as e:
                         await _invoke_resolver("exploration", e)
@@ -2731,6 +2765,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
+                        _phase_succeeded("exploration")
                         break
                     except Exception as e:
                         await _invoke_resolver("exploration", e)
@@ -2787,6 +2822,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                         logging.info("Exploration phase completed successfully!")
                         _commit_phase("exploration", {"iteration": iteration})
+                        _phase_succeeded("exploration")
                         break
                     except Exception as e:
                         await _invoke_resolver("exploration", e)
@@ -2885,6 +2921,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     logging.info("Formalization phase completed successfully!")
                     _commit_phase("formalization", {"iteration": iteration})
+                    _phase_succeeded("formalization")
                     break
                 except Exception as e:
                     for cid, wt in list(worktree_assignments.items()):
@@ -2975,6 +3012,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
                     logging.info("Formalization phase completed successfully!")
                     _commit_phase("formalization", {"iteration": iteration})
+                    _phase_succeeded("formalization")
                     break
                 except Exception as e:
                     for cid, wt in list(worktree_assignments.items()):
@@ -3052,6 +3090,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                             "routing through resolver for fresh-session retry"
                         )
                     _commit_phase("critic", {"iteration": iteration})
+                    _phase_succeeded("critic")
                     break
                 except Exception as e:
                     await _invoke_resolver("critic", e)
@@ -3106,6 +3145,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                             "routing through resolver for fresh-session retry"
                         )
                     _commit_phase("critic", {"iteration": iteration})
+                    _phase_succeeded("critic")
                     break
                 except Exception as e:
                     await _invoke_resolver("critic", e)
