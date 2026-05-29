@@ -406,6 +406,7 @@ def _audit_worktree_commits(worktree_assignments: dict[str, str], project_path: 
         )
         merged = merge_grep.returncode == 0 and bool(merge_grep.stdout.strip())
 
+        rescue_failed = False
         if dirty:
             # Rescue: auto-commit the dirty changes on the worktree branch so work
             # survives the upcoming `git worktree remove --force`. Broken code in
@@ -427,17 +428,19 @@ def _audit_worktree_commits(worktree_assignments: dict[str, str], project_path: 
                     committed = True
                     dirty = False
                 else:
-                    logging.warning(
+                    rescue_failed = True
+                    logging.error(
                         f"[audit] chunk {chunk_id}: rescue commit FAILED ({commit_res.stderr.strip()}); "
-                        f"work at {wt_path} will be LOST at cleanup."
+                        f"worktree at {wt_path} will be PRESERVED for forensics — manual triage needed."
                     )
             else:
-                logging.warning(
+                rescue_failed = True
+                logging.error(
                     f"[audit] chunk {chunk_id}: rescue `git add -A` FAILED ({add_res.stderr.strip()}); "
-                    f"work at {wt_path} will be LOST at cleanup."
+                    f"worktree at {wt_path} will be PRESERVED for forensics — manual triage needed."
                 )
 
-        report[chunk_id] = {"committed": committed, "merged": merged, "dirty": dirty}
+        report[chunk_id] = {"committed": committed, "merged": merged, "dirty": dirty, "rescue_failed": rescue_failed}
         if not committed and not merged:
             logging.warning(
                 f"[audit] chunk {chunk_id}: no commits on branch '{branch}' beyond main and no "
@@ -1133,18 +1136,32 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     _lean_lsp_stderr_file = None  # set when lean-lsp-mcp is (re)spawned
 
     def _assert_lsp_alive(phase: str) -> None:
-        """Fail loud if the LSP subprocess died since last check."""
+        """If the LSP subprocess died since last check, attempt restart; exit only on restart failure."""
         if _lean_lsp_proc is None:
             return
-        if _lean_lsp_proc.poll() is not None:
-            tail = ""
-            try:
-                tail = _lean_lsp_stderr_path.read_text()[-2000:]
-            except Exception:
-                pass
+        if _lean_lsp_proc.poll() is None:
+            return
+        tail = ""
+        try:
+            tail = _lean_lsp_stderr_path.read_text()[-2000:]
+        except Exception:
+            pass
+        logging.warning(
+            f"lean-lsp-mcp not alive before phase '{phase}' "
+            f"(exit={_lean_lsp_proc.returncode}). stderr tail:\n{tail}\n"
+            "Attempting restart before phase starts."
+        )
+        try:
+            _restart_lean_lsp_mcp()
+        except Exception as restart_err:
             logging.critical(
-                f"CRITICAL: lean-lsp-mcp died before phase '{phase}' "
-                f"(exit={_lean_lsp_proc.returncode}). stderr tail:\n{tail}"
+                f"CRITICAL: lean-lsp-mcp restart failed before phase '{phase}': {restart_err}"
+            )
+            exit(1)
+        # If the proc still isn't alive after restart, fail loud.
+        if _lean_lsp_proc is None or _lean_lsp_proc.poll() is not None:
+            logging.critical(
+                f"CRITICAL: lean-lsp-mcp restart returned but proc is dead before phase '{phase}'"
             )
             exit(1)
 
@@ -1507,6 +1524,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         worktree_assignments: dict[str, str] = {}
         run_cost = 0.0
         t_start = time.monotonic()
+        _audit_result: dict = {}
         try:
             with open(ACTIVE_PROMPTS_DIR / "FORMALIZATION/ESCALATION.md", "r") as f:
                 FORMALIZATION_PROMPT = with_library(f.read())
@@ -1573,11 +1591,17 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                 if isinstance(message, ResultMessage) and getattr(message, "total_cost_usd", None) is not None:
                     run_cost = float(message.total_cost_usd)
 
-            _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+            _audit_result = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
         except Exception as e:
             logging.error(f"ERROR (escalation phase): {e}")
         finally:
             for cid, wt in list(worktree_assignments.items()):
+                if _audit_result.get(cid, {}).get("rescue_failed"):
+                    logging.error(
+                        f"[cleanup] PRESERVING worktree {wt} for chunk {cid} — "
+                        f"rescue failed; manual triage required."
+                    )
+                    continue
                 try:
                     _cleanup_worktree(Path(wt), project_path, cid)
                 except Exception as cleanup_err:
@@ -2084,10 +2108,16 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _log_agent_message(message)
                     logging.info("[prove-formalization] orchestrator query returned — running post-run audit")
 
-                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    _audit_result = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
 
                     logging.info(f"[prove-formalization] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
+                        if _audit_result.get(cid, {}).get("rescue_failed"):
+                            logging.error(
+                                f"[cleanup] PRESERVING worktree {wt} for chunk {cid} — "
+                                f"rescue failed; manual triage required."
+                            )
+                            continue
                         _cleanup_worktree(Path(wt), project_path, cid)
                     worktree_assignments = {}
                     _delete_worktrees_manifest()
@@ -2911,10 +2941,16 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _log_agent_message(message)
                     logging.info("[formalization F] orchestrator query returned — running post-run audit")
 
-                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    _audit_result = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
 
                     logging.info(f"[formalization F] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
+                        if _audit_result.get(cid, {}).get("rescue_failed"):
+                            logging.error(
+                                f"[cleanup] PRESERVING worktree {wt} for chunk {cid} — "
+                                f"rescue failed; manual triage required."
+                            )
+                            continue
                         _cleanup_worktree(Path(wt), project_path, cid)
                     worktree_assignments = {}
                     _delete_worktrees_manifest()
@@ -3002,10 +3038,16 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                         _log_agent_message(message)
                     logging.info("[formalization T] orchestrator query returned — running post-run audit")
 
-                    _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
+                    _audit_result = _audit_worktree_commits(worktree_assignments, project_path, _main_branch)
 
                     logging.info(f"[formalization T] cleaning up {len(worktree_assignments)} worktree(s)")
                     for cid, wt in worktree_assignments.items():
+                        if _audit_result.get(cid, {}).get("rescue_failed"):
+                            logging.error(
+                                f"[cleanup] PRESERVING worktree {wt} for chunk {cid} — "
+                                f"rescue failed; manual triage required."
+                            )
+                            continue
                         _cleanup_worktree(Path(wt), project_path, cid)
                     worktree_assignments = {}
                     _delete_worktrees_manifest()
