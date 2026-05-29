@@ -1486,18 +1486,30 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         current_sigs = _chunk_body_signatures(Path.cwd(), project_path)
         if not current_sigs:
-            try:
-                has_any_sorry = any(
-                    re.search(r"\bsorry\b", _strip_lean_comments(p.read_text()))
-                    for p in project_path.rglob("*.lean")
+            # Fallback: track per-file sorry presence as pseudo-chunks so escalation
+            # can still fire on Path 3 / partial runs where lean_declaration / dag.json
+            # are absent. Pseudo-chunk IDs are the file paths relative to project_path.
+            file_sigs: dict[str, tuple[str, bool]] = {}
+            for lean_file in project_path.rglob("*.lean"):
+                if any(part in (".lake", "lake-packages", "build", ".worktrees") for part in lean_file.parts):
+                    continue
+                try:
+                    stripped = _strip_lean_comments(lean_file.read_text())
+                except Exception:
+                    continue
+                if re.search(r"\bsorry\b", stripped):
+                    try:
+                        rel = str(lean_file.relative_to(project_path))
+                    except ValueError:
+                        rel = str(lean_file)
+                    h = hashlib.sha256(stripped.encode("utf-8", "replace")).hexdigest()[:16]
+                    file_sigs[rel] = (h, True)
+            if file_sigs:
+                logging.info(
+                    f"[escalation] chunk-level signatures unavailable — falling back to "
+                    f"per-file tracking on {len(file_sigs)} sorry-bearing file(s)"
                 )
-            except Exception:
-                has_any_sorry = False
-            if has_any_sorry:
-                logging.warning(
-                    "[escalation] no chunk signatures resolved (lean_declaration/dag.json both empty) "
-                    "but project tree contains `sorry` — stagnation tracker is blind, escalation will not fire"
-                )
+                current_sigs = file_sigs
         _update_stagnation(state, current_sigs)
 
         candidates = _stagnant_chunks(state, threshold=2)
@@ -1782,6 +1794,14 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
                     break
                 except Exception as e:
                     await _invoke_resolver("strategy-critic", e)
+
+            # Escalation phase (stagnant sorry-bearing files; no-op if none).
+            # Path 3 has no chunk metadata so escalation uses the per-file fallback
+            # in _run_escalation_phase to pick stagnant files.
+            try:
+                await _run_escalation_phase(iteration, None)
+            except Exception as e:
+                logging.error(f"ERROR (escalation phase): {e}")
 
             # Loop status
             try:
