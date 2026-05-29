@@ -107,7 +107,6 @@ def run_setup(output_path: str = ".env"):
     env_vars["SEMIFORMALIZATION_BUDGET"] = prompt_with_default("Semiformalization phase budget", "5.0")
     env_vars["EXPLORATION_BUDGET"] = prompt_with_default("Exploration phase budget", "10.0")
     env_vars["SOURCE_SCAN_BUDGET"] = prompt_with_default("Source scan phase budget", "5.0")
-    env_vars["PREPARATION_BUDGET"] = prompt_with_default("Preparation phase budget", "5.0")
     env_vars["FORMALIZATION_BUDGET"] = prompt_with_default("Formalization phase budget", "15.0")
     env_vars["CRITIC_BUDGET"] = prompt_with_default("Critic phase budget", "5.0")
     env_vars["VALIDATION_BUDGET"] = prompt_with_default("Validation phase budget", "5.0")
@@ -161,7 +160,7 @@ def run_setup(output_path: str = ".env"):
 
         f.write("\n# Budget Configuration (USD)\n")
         for key in ["GENERATION_BUDGET", "SEMIFORMALIZATION_BUDGET", "EXPLORATION_BUDGET",
-                    "SOURCE_SCAN_BUDGET", "PREPARATION_BUDGET", "FORMALIZATION_BUDGET",
+                    "SOURCE_SCAN_BUDGET", "FORMALIZATION_BUDGET",
                     "CRITIC_BUDGET", "VALIDATION_BUDGET"]:
             f.write(f"{key}={env_vars[key]}\n")
 

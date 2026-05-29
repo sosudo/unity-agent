@@ -957,7 +957,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         validation_budget = parse_float(os.getenv("VALIDATION_BUDGET"))
         semiformalization_budget = parse_float(os.getenv("SEMIFORMALIZATION_BUDGET"))
         exploration_budget = parse_float(os.getenv("EXPLORATION_BUDGET"))
-        preparation_budget = parse_float(os.getenv("PREPARATION_BUDGET"))
         formalization_budget = parse_float(os.getenv("FORMALIZATION_BUDGET"))
         critic_budget = parse_float(os.getenv("CRITIC_BUDGET"))
         secondary_budget = parse_float(os.getenv("SECONDARY_BUDGET"))
@@ -1021,7 +1020,6 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"VALIDATION_BUDGET: {validation_budget}")
         logging.info(f"SEMIFORMALIZATION_BUDGET: {semiformalization_budget}")
         logging.info(f"EXPLORATION_BUDGET: {exploration_budget}")
-        logging.info(f"PREPARATION_BUDGET: {preparation_budget}")
         logging.info(f"FORMALIZATION_BUDGET: {formalization_budget}")
         logging.info(f"CRITIC_BUDGET: {critic_budget}")
         logging.info(f"SECONDARY_BUDGET: {secondary_budget}")
@@ -1779,7 +1777,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         return 0
 
     # ── Path 2: prove mode, no source ─────────────────────────────────────────
-    # Flow: exploration → generation → semiformalization (TT) → preparation → loop
+    # Flow: exploration → generation → semiformalization (TT) → critic loop (formalization T → critic → retro → escalation)
     if prove and source is None:
 
         # Exploration phase
