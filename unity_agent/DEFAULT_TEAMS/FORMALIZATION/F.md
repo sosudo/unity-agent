@@ -247,3 +247,5 @@ If you believe the source's argument is genuinely incomplete, ambiguous, or wron
 ---
 
 **Closing gate (do not end_turn until satisfied).** Verify that for every chunk in `worktrees.json`, either the worktree branch carries at least one chunk-level commit, or a `UNITY: merge chunk <id>` commit landed on the project's main branch. If neither, the post-run audit will flag the chunk as lost work and the resolver will retry.
+
+**Decision tracking.** If this phase made any non-obvious cross-cutting decision that downstream phases must honor (chunk boundary choice, IR grammar extension, exploration scope, proof-strategy commitment, helper-lemma placement), post it to the global thread (or your phase thread) and tag the post via `forum_tag(name="decision", post_ids=[<your_post_id>], description="one-line summary", tagger="<your-role>")`. Downstream phases call `forum_get_tag("decision")` at start to honor your decisions — untagged decisions are invisible to them. The pipeline logs a soft warning per iteration listing how many decisions were tagged.

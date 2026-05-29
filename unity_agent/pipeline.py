@@ -238,6 +238,28 @@ def _load_library_subagents() -> dict:
     return result
 
 
+def _count_decision_tagged_posts(run_dir: Path) -> int:
+    """Return the number of post_ids tagged 'decision' in the forum config.
+
+    Used by per-iteration soft warnings to surface whether the gen/semi/explore
+    phases produced any tagged decisions for downstream phases to honor. Zero
+    is not an error — it means either nothing decision-worthy occurred or the
+    agents didn't tag what they did decide. Either way the orchestrator only
+    logs; it does not gate.
+    """
+    cfg = run_dir / "forum" / "config.json"
+    if not cfg.exists():
+        return 0
+    try:
+        data = json.loads(cfg.read_text())
+    except Exception:
+        return 0
+    tag = data.get("tags", {}).get("decision")
+    if not tag:
+        return 0
+    return len(tag.get("post_ids", []))
+
+
 def _toposort_chunks(language_dir: Path) -> None:
     """Read chunk JSONs from language/chunks/, run Kahn's toposort, write dag.json."""
     chunks_dir = language_dir / "chunks"
@@ -1724,6 +1746,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
 
         iteration = 0
         while True:
+            _iter_decision_baseline = _count_decision_tagged_posts(Path.cwd())
             # Formalization phase
             _console.rule(f"[bold blue]Strategy Formalization Phase[/bold blue] (iteration {iteration})")
             _assert_lsp_alive("strategy-formalization")
@@ -1817,6 +1840,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             except Exception as e:
                 logging.error(f"ERROR (escalation phase): {e}")
 
+            _decisions_added = _count_decision_tagged_posts(Path.cwd()) - _iter_decision_baseline
+            logging.info(f"[decision-tags] iteration {iteration}: {_decisions_added} new decision-tagged post(s)")
             # Loop status
             try:
                 report_text = _read_report_md()
@@ -2070,6 +2095,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         iteration = 0
         previous_sorry_chunks: frozenset[str] | None = None
         while True:
+            _iter_decision_baseline = _count_decision_tagged_posts(Path.cwd())
 
             # Formalization phase (always T variant: existing project always present)
             _console.rule("[bold blue]Formalization Phase[/bold blue]")
@@ -2287,6 +2313,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
             except Exception as e:
                 logging.error(f"ERROR (escalation phase): {e}")
 
+            _decisions_added = _count_decision_tagged_posts(Path.cwd()) - _iter_decision_baseline
+            logging.info(f"[decision-tags] iteration {iteration}: {_decisions_added} new decision-tagged post(s)")
             # Loop status check
             try:
                 report_text = _read_report_md()
@@ -2661,6 +2689,7 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
     iteration = 0
     previous_sorry_chunks: frozenset[str] | None = None
     while True:
+        _iter_decision_baseline = _count_decision_tagged_posts(Path.cwd())
 
         # Exploration phase
 
@@ -3294,6 +3323,8 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         except Exception as e:
             logging.error(f"ERROR (escalation phase): {e}")
 
+        _decisions_added = _count_decision_tagged_posts(Path.cwd()) - _iter_decision_baseline
+        logging.info(f"[decision-tags] iteration {iteration}: {_decisions_added} new decision-tagged post(s)")
         # Critic loop status check
         try:
             report_text = _read_report_md()
