@@ -1174,6 +1174,24 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         elif not _is_lean_repo(project_path):
             _run(["lake", "init", project_path.name, "math"], cwd=project_path)
 
+        # Ensure the project's git repo has at least one commit. `lake new` /
+        # `lake init` run `git init` but don't make an initial commit, and
+        # `git worktree add` against an unborn HEAD produces worktrees with
+        # an empty tree — which causes squash-merge to "delete" every project
+        # file that the worktree branch doesn't carry. Make a UNITY initial
+        # commit here so all worktree branches start from a populated tree.
+        _head_check = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=project_path, capture_output=True, text=True,
+        )
+        if _head_check.returncode != 0:
+            logging.info("Lean project has no HEAD commit — creating UNITY initial commit.")
+            subprocess.run(["git", "add", "-A"], cwd=project_path, check=False)
+            subprocess.run(
+                ["git", "commit", "-m", "UNITY: initial project commit", "--allow-empty"],
+                cwd=project_path, check=False,
+            )
+
         logging.info("Lean project initialized successfully!")
     except Exception as e:
         logging.critical(f"CRITICAL (project initialization): {e}")
