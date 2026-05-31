@@ -87,12 +87,8 @@ def _commit_phase(phase_name: str, metadata: dict | None = None) -> None:
     try:
         subprocess.run(["git", "add", "-A"], check=True, capture_output=True)
         subprocess.run(["git", "commit", "-m", msg, "--allow-empty"], check=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or b"").decode("utf-8", errors="replace").strip() if isinstance(e.stderr, bytes) else (e.stderr or "").strip()
-        logging.warning(
-            f"_commit_phase('{phase_name}') failed (rc={e.returncode}): "
-            f"{stderr or 'no stderr'} — resolver will see stale last-checkpoint"
-        )
+    except subprocess.CalledProcessError:
+        pass
 
 
 _JSON_ESCAPE_OR_STRAY = re.compile(r'\\(?:["\\/bfnrtu]|u[0-9a-fA-F]{4})|\\')
