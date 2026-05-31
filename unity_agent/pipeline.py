@@ -1491,10 +1491,18 @@ async def run_pipeline(source: str | None, project_dir: str, context: bool, prov
         logging.info(f"Recursive unity subagent registered (child depth: {child_depth})")
 
     def with_library(prompt: str) -> str:
-        """Append the library context manifest to a prompt (if any libraries seeded)."""
+        """Append library context and tool-naming reminder to a prompt."""
+        tool_note = (
+            "\n\n---\n\n"
+            "**Tool naming:** MCP forum tools are named with a HYPHEN: "
+            "`mcp__unity-forum__forum_post`, `mcp__unity-forum__forum_create_thread`, etc. "
+            "Not `mcp__unity_forum__*` (underscore) and not bare `forum_post` via Skill. "
+            "Any other spelling will silently no-op."
+        )
+        out = prompt + tool_note
         if library_context:
-            return prompt + "\n\n---\n\n" + library_context
-        return prompt
+            out = out + "\n\n---\n\n" + library_context
+        return out
 
     # Resolver infrastructure
     _retries: dict[str, int] = {}
