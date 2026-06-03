@@ -117,3 +117,20 @@ Never scan, traverse, or glob outside these roots. On shared/NFS filesystems, wi
 3. Fail loudly with a clear error message and return. The orchestrator will re-dispatch you with better context.
 
 A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it probably finishes quickly on this machine." Assume NFS. Stay inside your roots.
+
+**On reporting BLOCKED to the parent**
+
+There is no formal BLOCKED status. The child unity run either:
+
+- exits with Lean files that reduce the sorry surface vs the starting state (full success or partial progress), OR
+- exits with Lean files unchanged from the starting state (the child failed to make progress; this is a child-run defect, not a verdict on the underlying mathematics).
+
+If the child's `REPORT.md` or status output claims the work is "blocked" / "research-grade" / "requires ~Nk lines of LogRel port" but the Lean files are unchanged from the starting commit, you must not relay that claim to the parent as a definitive verdict. The parent will read your handoff, forum-tag it as a binding "decision," and all subsequent runs will refuse to attempt the work — calcifying a single agent's pessimistic guess into permanent project state. This failure mode has happened in past runs and produced multi-week NO-OP convergence; do not reproduce it.
+
+Your handoff to the parent must distinguish three cases:
+
+1. **Committed partial progress in the child** → report the diff, the narrowed sub-goals, the lemmas proved, and the next recommended scope.
+2. **Specific concrete obstacle** → report the exact goal state and the tactics that failed, NOT a prose narrative about how large the missing infrastructure would be.
+3. **Clean-tree child return** → "the child made no committed progress; recommend retry with smaller scope or different decomposition" — NOT "the work is BLOCKED."
+
+Do not write the word "BLOCKED" in your handoff or in any forum post. The word is contagious through the forum decision-tag system: once a parent agent writes "child returned BLOCKED," subsequent runs read that as load-bearing evidence the work is impossible, and refuse to dispatch any further attempts. A bounded child run's pessimistic guess is not evidence of mathematical impossibility — it is a child-run defect to be reported as such.

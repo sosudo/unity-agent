@@ -48,6 +48,53 @@ If after exhausting every avenue the chunk still cannot be closed, post a full f
 
 "Expected proof placeholder," "interim state," "assembly pending," "will be filled in later," "awaiting Mathlib," "standard textbook result," "out of scope" — none of these are valid framings. There is no later. If Mathlib lacks it, build it here.
 
+**INVARIANT 2: Never bundle proof obligations into structure fields (Prop-typed fields)**
+
+A structurally equivalent but banned workaround is adding a `Prop`-typed field to an existing structure (`AdmissibleDatum`, `MinkowskiLatticeData`, `ProPGroup`, or any other) whose type encodes the very theorem you are trying to prove. Examples of **forbidden** patterns:
+
+```lean
+-- FORBIDDEN: adding the proof obligation as a structure field
+structure AdmissibleDatum where
+  ...
+  normOneSetU : ∀ H : ℝ, H > 0 → h(K) ≤ H^f → ∃ U : Finset K, ...  -- BANNED
+
+structure MinkowskiLatticeData where
+  ...
+  coset_averaging : ∀ γ > 0, ..., ∃ a, E_a ≥ ...  -- BANNED
+```
+
+Projecting such a field to prove the theorem is identical to `axiom` and is detected by the CRITIC as an Invariant 2 violation. The run will not merge if such fields are present.
+
+The **valid** data extension pattern (for genuinely missing data, not proofs):
+```lean
+-- VALID: adding actual data that the proof can use
+structure AdmissibleDatum where
+  ...
+  primeIdealPairs : Fin t → (Ideal (𝓞 K) × Ideal (𝓞 K))  -- actual ideal data, not a Prop
+  primePairs_conjugate : ∀ b, (primeIdealPairs b).2 = Ideal.comap (IsCMField.complexConj K) (primeIdealPairs b).1
+  -- ^ a Prop constraint ON the data, not the theorem itself
+```
+
+The test: **Is this field providing data that the proof algorithm needs, or is it assuming the conclusion of the theorem?** Data fields are valid; conclusion fields are banned.
+
+If a structure genuinely needs a new data field, document the change on the forum layer coordination thread, update dependent files, and commit. If you are tempted to add a `Prop → goal` field to avoid proving something — return without writing anything instead.
+
+**Post-build axiom audit**
+
+After the final `lake build` succeeds, the orchestrator (or the last ProofFormalizer in the merge sequence) should run:
+
+```bash
+lake env lean --run <(echo '#import UnitDistance\n#print axioms UnitDistance.theorem11_mainResult') > AXIOM_AUDIT.txt 2>&1
+git add AXIOM_AUDIT.txt && git commit -m "FORMALIZATION: add AXIOM_AUDIT.txt"
+```
+
+(Substitute the correct import path and main theorem name for the project.) This generates the required `AXIOM_AUDIT.txt` gate file and makes the axiom list visible to the CRITIC. **If AXIOM_AUDIT.txt is missing, the CRITIC will flag it as a gate failure.** Do not assume the CRITIC or the RETROSPECTIVE agent will generate this file — it is the formalization phase's responsibility.
+
+Similarly, whenever `REMAINING_AXIOMS.md` exists and claims an axiom is "✅ RESOLVED", verify that the `axiom` keyword is **literally absent** from the relevant Lean file before accepting that claim:
+```bash
+grep -r 'axiom <name>' UnitDistance/  # must return nothing for a genuine resolution
+```
+
 **Worktree**
 
 The orchestrator that spawned you has assigned you an isolated git worktree for your chunk. The worktree path is provided in your spawn prompt (look for a path under `.worktrees/` or labeled `worktree_path`). **Before doing anything else, `cd` to that path.** All reads, writes, and builds must happen inside that worktree — never modify files in the main project directory.
@@ -177,3 +224,15 @@ Every chunk in `semiformal/chunks/<id>.json` carries two immutable fields set at
 Your task is to **transcribe** the mathematical argument already written in the source into Lean syntax — not to rediscover it. If you find yourself inventing intermediate bounds, algebraic manipulations, or case splits that are not literally present in `source_proof` (or elsewhere in the source), stop and re-read. Most source proofs for undergraduate- or graduate-level mathematics are already close to step-by-step, and the formalizer's job is mechanical translation plus type and coercion glue, not re-derivation.
 
 If you believe the source's argument is genuinely incomplete, ambiguous, or wrong for Lean's foundations, post to the chunk's forum thread with a specific question and continue attempting; if you still cannot resolve it, return without writing `sorry` per the sorry policy. Do **not** fabricate steps the source does not contain.
+
+**Partial progress is mandatory; reverting is a phase failure**
+
+You may not return with the worktree in the same state you found it. Specifically:
+
+- Do not `git checkout`, `git restore`, or `git reset` files you edited during your attempt. The only valid way to undo an edit is to replace it with a better one. Probe files (scratch `Test*.lean`, `Probe*.lean`) can be deleted; files you were assigned to edit cannot be reverted.
+- A clean-revert return ("I attempted the proof, hit obstacles, reverted my work, returned cleanly") is treated identically to "I did not attempt the proof." Both fail the formalization phase's precondition and trigger re-spawn.
+- If you cannot close the top-level goal, your final committed state must be a strict reduction of the original sorry surface: a `have` chain that names the unproven sub-goals, a case split where some cases close and the rest carry narrower internal sorries, or a reduction to a precisely-stated missing lemma. **A narrower internal sorry on a named sub-goal is acceptable interim output. A clean revert is not.**
+- "Missing infrastructure" — a Mathlib gap, a missing project-internal lemma, an unproven background theorem (a Fundamental Lemma, a logical-relations model, an NbE soundness statement, a normalization result) — is never a license to revert. Either build the missing piece in this worktree (recursing into the same policy), or leave your partial proof in place with narrower internal sorries naming the specific missing piece. The orchestrator and critic cannot distinguish "the math is genuinely intractable" from "I gave up after 20 minutes" from a clean tree — they will assume the former and the work will calcify across subsequent runs.
+- The phase audit greps `git log master..HEAD` and inspects your worktree diff. Zero new commits, or commits that touch only forum/notes files without reducing the sorry surface in any assigned chunk, is a precondition failure.
+
+The framings "research-level gap," "requires ~Nk lines of additional infrastructure," "blocked by a cycle in the existing design," "must port LogRel/PolyRed/Fundamental," "out of scope for one context window," "depth>0 escalation required" — none of these change the rule. They may be true; they are still not licenses to revert. Commit the partial attempt. Name the missing piece in an internal `sorry` comment (e.g. `sorry -- needs Pi-type injectivity for the codomain B ≡ B', currently circular via nbe_sound`). Let the parent decide whether to dispatch additional subagents at the missing piece.

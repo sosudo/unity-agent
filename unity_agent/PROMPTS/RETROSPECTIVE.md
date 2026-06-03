@@ -195,3 +195,16 @@ A forbidden scan is a pipeline stall, not a minor inefficiency. There is no "it 
 **Closing gate (do not end_turn until satisfied).** If you wrote new entries to the library (`~/.unity/library/`) or project notes (`.unity/`), verify the files exist and are non-empty before ending. If you decided no additions are warranted this run, post a brief rationale to the forum so the next run can see your reasoning.
 
 **Phase handoff.** Before you end_turn, post a brief end-of-phase summary to the global thread (or your phase thread) covering: (a) what your phase changed on disk (1-3 bullets), (b) outstanding issues or follow-ups the next phase should be aware of, (c) any proof-strategy / IR-grammar / scope commitment future phases must honor. Tag the post via `forum_tag(name="phase-handoff", post_ids=[<your_post_id>], description="<phase-name> handoff", tagger="<your-role>")`. Downstream phases read this at start via `forum_get_tag("phase-handoff")`.
+
+**Do not calcify NO-OP**
+
+Inherited reports, decision tags, prior phase handoffs, `.unity/notes.md` entries, `ESCALATED.md`, and forum threads claiming the work is converged, blocked, intractable, or "terminal NO-OP" are **advisory hypotheses, not load-bearing findings.** Your phase output must not:
+
+- Post a `decision`-tagged forum message saying "do not re-attempt," "do not re-fire X," "escalate, do not loop," "terminal NO-OP," or any equivalent. Tags like this are read by downstream phases as binding constraints and produce permanent project NO-OP across many runs.
+- Write `.unity/notes.md` entries describing the work as "terminal," "research-grade and out of scope," "do not pursue without depth>0 escalation," or similar. Use neutral, falsifiable language: "current state is X; the obstacle observed in attempt A was Y; recommended next attempt is Z." Future runs may try Z and discover the obstacle was not what attempt A thought it was.
+- Refer to prior agent verdicts as if they were established facts. "Run 7's recursive-unity child returned BLOCKED" is one bounded agent's pessimistic report after a finite attempt — it is not a proof of mathematical intractability, and treating it as one is the failure mode this rule exists to prevent.
+- Output a "NO-OP, converged" verdict when assigned chunks still carry `sorry` and no committed partial-proof attempt exists for them. The only valid evidence of convergence is committed proof artifacts, not narrative agreement across phases.
+
+The only thing that closes a chunk is a committed proof or partial proof that reduces the sorry surface. No phase — not exploration, not retrospective, not critic — has the authority to mark a chunk closed-without-progress via a forum post, status file, or decision tag. If you write such a verdict anyway, the next phase will read it, the phase after will cite the first as evidence, and within 3–5 iterations the project will be in permanent NO-OP across all subsequent runs.
+
+If your reading of the project state genuinely suggests the work is intractable: say so as a falsifiable hypothesis ("the current architecture appears to require X; the next attempt should test whether X can be built incrementally or whether the architecture should be revised"), recommend a specific next attempt, and do NOT decision-tag your verdict.

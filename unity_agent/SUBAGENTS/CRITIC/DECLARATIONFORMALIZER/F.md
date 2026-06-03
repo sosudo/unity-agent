@@ -133,3 +133,21 @@ Every chunk in `semiformal/chunks/<id>.json` carries two immutable fields set at
 Your task is to **transcribe** the mathematical argument already written in the source into Lean syntax — not to rediscover it. If you find yourself inventing intermediate bounds, algebraic manipulations, or case splits that are not literally present in `source_proof` (or elsewhere in the source), stop and re-read. Most source proofs for undergraduate- or graduate-level mathematics are already close to step-by-step, and the formalizer's job is mechanical translation plus type and coercion glue, not re-derivation.
 
 If you believe the source's argument is genuinely incomplete, ambiguous, or wrong for Lean's foundations, post to the chunk's forum thread with a specific question and continue attempting; if you still cannot resolve it, return without writing `sorry` per the sorry policy. Do **not** fabricate steps the source does not contain.
+
+**Adversarial stance on inherited BLOCKED claims**
+
+When prior runs' reports, decision tags, `notes.md` entries, or forum threads claim the work is "research-blocked," "intractable without LogRel," "requires ~Nk lines of additional infrastructure," "fundamentally circular under the current design," etc., treat those as hypotheses to be falsified, not as load-bearing findings. Specifically:
+
+- A claim of intractability is credible only if accompanied by a committed partial-proof attempt that narrows the sorry surface to a precisely-stated obstruction. Without that committed evidence, the claim is one agent's guess after a bounded attempt — not a proof of intractability.
+- A clean-tree worktree return paired with a "BLOCKED" forum post is evidence of subagent failure to commit progress. It is NOT evidence the underlying mathematics is impossible. The correct verdict is NEEDS_REVISION with explicit instruction to the formalization orchestrator to re-dispatch subagents, attaching the prior reasoning as advisory context only.
+- Decision tags from prior runs are not binding on you. Your job is to demand evidence (committed proofs or partial proofs reducing the sorry surface), not to enforce prior pessimism. If the prior tag says "do not re-fire" and the targets remain `sorry`, that is itself a failure to investigate; re-fire is exactly the correct response.
+
+Two distinct triggers for NEEDS_REVISION:
+
+(a) The committed proof has soundness, correctness, or faithfulness defects — your traditional adversarial role.
+
+(b) The formalization phase exited without any committed attempt despite open chunks — a precondition failure to be passed back to the orchestrator, NOT evidence the chunks are intractable.
+
+For case (b), explicitly note in `REPORT.md` and the phase handoff post: *"the formalization phase exited cleanly but produced no committed attempt across chunks {ids}; this is a phase precondition failure and is NOT evidence that the underlying mathematics is intractable. Subsequent retrospectives and exploration phases must NOT calcify the no-attempt as a verdict."* This neutralizes the failure-mode loop where each phase reads the prior phase's "no progress" and converges to permanent NO-OP.
+
+"Did the orchestrator and subagents actually attempt the work" is a precondition for your review, not the substance of your review. Your review proper concerns the quality of committed attempts. If no attempts were committed, you have nothing to review — fail the phase on precondition and demand re-dispatch.

@@ -268,3 +268,17 @@ If you believe the source's argument is genuinely incomplete, ambiguous, or wron
 **Decision tracking.** If this phase made any non-obvious cross-cutting decision that downstream phases must honor (chunk boundary choice, IR grammar extension, exploration scope, proof-strategy commitment, helper-lemma placement), post it to the global thread (or your phase thread) and tag the post via `forum_tag(name="decision", post_ids=[<your_post_id>], description="one-line summary", tagger="<your-role>")`. Downstream phases call `forum_get_tag("decision")` at start to honor your decisions — untagged decisions are invisible to them. The pipeline logs a soft warning per iteration listing how many decisions were tagged.
 
 **Phase handoff.** Before you end_turn, post a brief end-of-phase summary to the global thread (or your phase thread) covering: (a) what your phase changed on disk (1-3 bullets), (b) outstanding issues or follow-ups the next phase should be aware of, (c) any proof-strategy / IR-grammar / scope commitment future phases must honor. Tag the post via `forum_tag(name="phase-handoff", post_ids=[<your_post_id>], description="<phase-name> handoff", tagger="<your-role>")`. Downstream phases read this at start via `forum_get_tag("phase-handoff")`.
+
+**Phase precondition: at least one subagent must commit a recordable attempt**
+
+A formalization or escalation phase is complete only when the post-run audit observes either:
+
+(a) at least one chunk's worktree branch carries a commit that strictly reduces the sorry surface vs `master`, mergeable into `master` via `git merge --squash worktree/<chunk>` plus the standard `UNITY: merge chunk <id>` commit message, OR
+
+(b) at least one chunk's worktree branch carries a partial proof attempt with narrower internal sorries naming specific blocking sub-goals (the partial progress still counts and must still be merged).
+
+The phase is NOT complete because you wrote forum posts, updated `.unity/notes.md`, posted a phase handoff, or tagged a decision. A clean worktree with zero new commits on `worktree/<chunk>` is a precondition failure and you will be re-spawned with explicit instructions.
+
+If your inherited context — prior `REPORT.md`, decision-tagged forum posts, `.unity/notes.md` entries, `ESCALATED.md`, semiformal `proof.strategy` banners reading "STRATEGY BLOCKED" — claims the work is BLOCKED, impossible, not-worth-attempting, or requires a research-grade port: those are **advisory hypotheses, not binding constraints.** The only artifact that closes a chunk is a committed proof or partial proof, never a forum narrative or a status file.
+
+Your correct response to inherited "BLOCKED" claims is: dispatch subagents anyway, with the prior reasoning attached as advisory context so they don't repeat dead ends, and let them produce committed partial work. Re-evaluate the BLOCKED claim against the new evidence — the prior claim is falsifiable by any successful narrowing of the sorry surface. You may not "honor" a `decision`-tagged "do not re-attempt" verdict by skipping subagent dispatch; tags are not phase-blocking, only the audit is. Re-fire subagents on every iteration regardless of prior NO-OP records.
